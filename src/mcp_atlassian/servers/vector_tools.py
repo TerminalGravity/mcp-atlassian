@@ -14,6 +14,7 @@ from pydantic import Field
 from mcp_atlassian.servers.jira import jira_mcp
 from mcp_atlassian.vector.config import VectorConfig
 from mcp_atlassian.vector.embeddings import EmbeddingPipeline
+from mcp_atlassian.vector.self_query import SelfQueryParser
 from mcp_atlassian.vector.store import LanceDBStore
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 _vector_store: LanceDBStore | None = None
 _embedder: EmbeddingPipeline | None = None
 _config: VectorConfig | None = None
+_self_query_parser: SelfQueryParser | None = None
 
 
 def _get_config() -> VectorConfig:
@@ -46,6 +48,14 @@ def _get_embedder() -> EmbeddingPipeline:
     if _embedder is None:
         _embedder = EmbeddingPipeline(config=_get_config())
     return _embedder
+
+
+def _get_parser() -> SelfQueryParser:
+    """Get or create self-query parser singleton."""
+    global _self_query_parser
+    if _self_query_parser is None:
+        _self_query_parser = SelfQueryParser()
+    return _self_query_parser
 
 
 @jira_mcp.tool(
@@ -472,4 +482,141 @@ async def jira_vector_sync_status(
         logger.error(f"Sync status error: {e}", exc_info=True)
         return json.dumps({
             "error": str(e),
+        }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read"},
+    annotations={"title": "Knowledge Query", "readOnlyHint": True},
+)
+async def jira_knowledge_query(
+    ctx: Context,
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Natural language query with optional filters. Examples:\n"
+                "- 'auth bugs from last month'\n"
+                "- 'open stories in PLATFORM project'\n"
+                "- 'high priority issues assigned to john'\n"
+                "- 'API performance problems in Q4'"
+            )
+        ),
+    ],
+    limit: Annotated[
+        int,
+        Field(
+            description="Maximum results to return (1-20)",
+            ge=1,
+            le=20,
+            default=10,
+        ),
+    ] = 10,
+) -> str:
+    """
+    Smart search using natural language with automatic filter extraction.
+
+    Automatically parses your query to extract:
+    - Structured filters (project, type, status, assignee, dates, etc.)
+    - Semantic search terms (what to find by meaning)
+
+    More powerful than jira_semantic_search - understands context like:
+    - "bugs from last week" → type=Bug, created>=7d ago
+    - "open stories" → type=Story, status!=Done
+    - "assigned to john" → assignee filter
+
+    Returns compact results (~800 tokens) with parsed interpretation.
+
+    Args:
+        ctx: The FastMCP context.
+        query: Natural language query with optional filters.
+        limit: Maximum number of results.
+
+    Returns:
+        JSON string with matching issues, filters applied, and interpretation.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+        parser = _get_parser()
+        config = _get_config()
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "Vector index is empty. Run sync first.",
+                "hint": "Use CLI: mcp-atlassian-vector sync --full",
+            }, indent=2)
+
+        # Parse the query using LLM
+        parsed = await parser.parse(query)
+
+        # Generate query embedding if there's a semantic query
+        results = []
+        if parsed.semantic_query:
+            query_vector = await embedder.embed(parsed.semantic_query)
+
+            # Translate filters to LanceDB format
+            lancedb_filters = parser.translate_to_lancedb_filters(parsed.filters)
+
+            # Perform hybrid search
+            results = store.hybrid_search(
+                query_vector=query_vector,
+                query_text=parsed.semantic_query,
+                limit=limit,
+                filters=lancedb_filters if lancedb_filters else None,
+                fts_weight=config.fts_weight,
+            )
+        elif parsed.filters:
+            # Filter-only query (no semantic search)
+            # Use a generic vector search with filters
+            # Generate embedding for a neutral query
+            query_vector = await embedder.embed("issue")
+            lancedb_filters = parser.translate_to_lancedb_filters(parsed.filters)
+
+            results = store.search_issues(
+                query_vector=query_vector,
+                limit=limit,
+                filters=lancedb_filters,
+            )
+        else:
+            # No filters and no semantic query - return error
+            return json.dumps({
+                "error": "Could not understand query",
+                "query": query,
+                "hint": "Try a more specific query like 'bugs in PROJECT' or 'issues about authentication'",
+            }, indent=2)
+
+        # Format response (token-optimized)
+        response = {
+            "query": query,
+            "parsed": {
+                "semantic_search": parsed.semantic_query or "(none)",
+                "filters": parsed.filters or {},
+                "interpretation": parsed.interpretation,
+                "confidence": parsed.confidence,
+            },
+            "total_matches": len(results),
+            "results": [
+                {
+                    "key": r["issue_id"],
+                    "summary": r["summary"][:120],
+                    "type": r["issue_type"],
+                    "status": r["status"],
+                    "project": r["project_key"],
+                    "score": round(r.get("score", 0), 3),
+                }
+                for r in results
+            ],
+            "hint": "Use jira_get_issue with issue key for full details",
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"Knowledge query error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "query": query,
         }, indent=2)
