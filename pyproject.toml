@@ -29,8 +29,8 @@ dependencies = [
     "types-cachetools>=5.5.0.20240820",
 ]
 [[project.authors]]
-name = "sooperset"
-email = "soomiles.dev@gmail.com"
+name = "Jack Felke"
+email = "jfelke@alldigitalrewards.com"
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning>=0.7.0"]
