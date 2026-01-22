@@ -75,8 +75,13 @@ class JiraFetcher(
     pass
 
 
+# Alias for backward compatibility with vector module
+JiraFacade = JiraFetcher
+
+
 __all__ = [
     "JiraFetcher",
+    "JiraFacade",
     "JiraConfig",
     "JiraClient",
     "Jira",
