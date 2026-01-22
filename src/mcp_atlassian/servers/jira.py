@@ -10,6 +10,7 @@ from requests.exceptions import HTTPError
 
 from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
 from mcp_atlassian.jira.constants import DEFAULT_READ_JIRA_FIELDS
+from mcp_atlassian.jira.response_formatter import ResponseFormatter
 from mcp_atlassian.models.jira.common import JiraUser
 from mcp_atlassian.servers.dependencies import get_jira_fetcher
 from mcp_atlassian.utils.decorators import check_write_access
@@ -227,6 +228,16 @@ async def search(
             default=None,
         ),
     ] = None,
+    compact: Annotated[
+        bool,
+        Field(
+            description=(
+                "If true (default), returns compressed response with truncated descriptions, "
+                "flattened objects, and relative timestamps. Set to false for full API response."
+            ),
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Search Jira issues using JQL (Jira Query Language).
 
@@ -238,6 +249,7 @@ async def search(
         start_at: Starting index for pagination.
         projects_filter: Comma-separated list of project keys to filter by.
         expand: Optional fields to expand.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing the search results including pagination info.
@@ -256,6 +268,10 @@ async def search(
         projects_filter=projects_filter,
     )
     result = search_result.to_simplified_dict()
+
+    if compact:
+        result = ResponseFormatter.compress_search_result(result)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -311,6 +327,13 @@ async def get_project_issues(
         int,
         Field(description="Starting index for pagination (0-based)", default=0, ge=0),
     ] = 0,
+    compact: Annotated[
+        bool,
+        Field(
+            description="If true (default), returns compressed response.",
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Get all issues for a specific Jira project.
 
@@ -319,6 +342,7 @@ async def get_project_issues(
         project_key: The project key.
         limit: Maximum number of results.
         start_at: Starting index for pagination.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing the search results including pagination info.
@@ -328,6 +352,10 @@ async def get_project_issues(
         project_key=project_key, start=start_at, limit=limit
     )
     result = search_result.to_simplified_dict()
+
+    if compact:
+        result = ResponseFormatter.compress_search_result(result)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -430,6 +458,13 @@ async def get_agile_boards(
         int,
         Field(description="Maximum number of results (1-50)", default=10, ge=1, le=50),
     ] = 10,
+    compact: Annotated[
+        bool,
+        Field(
+            description="If true (default), returns compressed response.",
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Get jira agile boards by name, project key, or type.
 
@@ -440,6 +475,7 @@ async def get_agile_boards(
         board_type: Board type ('scrum' or 'kanban').
         start_at: Starting index.
         limit: Maximum results.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing a list of board objects.
@@ -453,6 +489,10 @@ async def get_agile_boards(
         limit=limit,
     )
     result = [board.to_simplified_dict() for board in boards]
+
+    if compact:
+        result = ResponseFormatter.compress_boards(result)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -504,6 +544,13 @@ async def get_board_issues(
             default="version",
         ),
     ] = "version",
+    compact: Annotated[
+        bool,
+        Field(
+            description="If true (default), returns compressed response.",
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Get all issues linked to a specific board filtered by JQL.
 
@@ -515,6 +562,7 @@ async def get_board_issues(
         start_at: Starting index for pagination.
         limit: Maximum number of results.
         expand: Optional fields to expand.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing the search results including pagination info.
@@ -533,6 +581,10 @@ async def get_board_issues(
         expand=expand,
     )
     result = search_result.to_simplified_dict()
+
+    if compact:
+        result = ResponseFormatter.compress_search_result(result)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -555,6 +607,13 @@ async def get_sprints_from_board(
         int,
         Field(description="Maximum number of results (1-50)", default=10, ge=1, le=50),
     ] = 10,
+    compact: Annotated[
+        bool,
+        Field(
+            description="If true (default), returns compressed response.",
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Get jira sprints from board by state.
 
@@ -564,6 +623,7 @@ async def get_sprints_from_board(
         state: Sprint state ('active', 'future', 'closed'). If None, returns all sprints.
         start_at: Starting index.
         limit: Maximum results.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing a list of sprint objects.
@@ -573,6 +633,10 @@ async def get_sprints_from_board(
         board_id=board_id, state=state, start=start_at, limit=limit
     )
     result = [sprint.to_simplified_dict() for sprint in sprints]
+
+    if compact:
+        result = ResponseFormatter.compress_sprints(result)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -602,6 +666,13 @@ async def get_sprint_issues(
         int,
         Field(description="Maximum number of results (1-50)", default=10, ge=1, le=50),
     ] = 10,
+    compact: Annotated[
+        bool,
+        Field(
+            description="If true (default), returns compressed response.",
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Get jira issues from sprint.
 
@@ -611,6 +682,7 @@ async def get_sprint_issues(
         fields: Comma-separated fields to return.
         start_at: Starting index.
         limit: Maximum results.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing the search results including pagination info.
@@ -624,6 +696,10 @@ async def get_sprint_issues(
         sprint_id=sprint_id, fields=fields_list, start=start_at, limit=limit
     )
     result = search_result.to_simplified_dict()
+
+    if compact:
+        result = ResponseFormatter.compress_search_result(result)
+
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
@@ -1625,12 +1701,20 @@ async def get_all_projects(
             default=False,
         ),
     ] = False,
+    compact: Annotated[
+        bool,
+        Field(
+            description="If true (default), returns compressed response with only key, name, type.",
+            default=True,
+        ),
+    ] = True,
 ) -> str:
     """Get all Jira projects accessible to the current user.
 
     Args:
         ctx: The FastMCP context.
         include_archived: Whether to include archived projects.
+        compact: If true, compress response for reduced context usage.
 
     Returns:
         JSON string representing a list of project objects accessible to the user.
@@ -1676,6 +1760,9 @@ async def get_all_projects(
             for project in projects
             if project.get("key") in allowed_project_keys
         ]
+
+    if compact:
+        projects = ResponseFormatter.compress_projects(projects)
 
     return json.dumps(projects, indent=2, ensure_ascii=False)
 

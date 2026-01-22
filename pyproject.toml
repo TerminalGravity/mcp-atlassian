@@ -27,6 +27,10 @@ dependencies = [
     "keyring>=25.6.0",
     "cachetools>=5.0.0",
     "types-cachetools>=5.5.0.20240820",
+    # Vector search dependencies
+    "lancedb>=0.20.0",
+    "openai>=1.60.0",
+    "pyarrow>=18.0.0",
 ]
 [[project.authors]]
 name = "Jack Felke"
@@ -92,6 +96,8 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "tests/**/*.py" = ["S", "ANN", "B017"]
 "tests/fixtures/*.py" = ["E501"]
 "src/mcp_atlassian/server.py" = ["E501"]
+"src/mcp_atlassian/servers/jira.py" = ["E501", "FBT"]
+"src/mcp_atlassian/jira/response_formatter.py" = ["FBT"]
 
 [tool.ruff.format]
 quote-style = "double"

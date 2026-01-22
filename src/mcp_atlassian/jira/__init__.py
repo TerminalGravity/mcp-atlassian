@@ -16,6 +16,7 @@ from .config import JiraConfig
 from .epics import EpicsMixin
 from .fields import FieldsMixin
 from .formatting import FormattingMixin
+from .response_formatter import ResponseFormatter
 from .issues import IssuesMixin
 from .links import LinksMixin
 from .metrics import MetricsMixin
@@ -81,4 +82,5 @@ __all__ = [
     "Jira",
     "MetricsMixin",
     "SLAMixin",
+    "ResponseFormatter",
 ]
