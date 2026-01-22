@@ -268,6 +268,186 @@ def daemon_command(ctx: click.Context, interval: int, projects: str | None) -> N
         raise SystemExit(1) from e
 
 
+@vector_cli.command("search")
+@click.argument("query")
+@click.option(
+    "--project",
+    type=str,
+    help="Filter by project key (e.g., 'PROJ')",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=10,
+    help="Maximum results to return (default: 10)",
+)
+@click.option(
+    "--comments",
+    is_flag=True,
+    help="Search comments instead of issues",
+)
+@click.pass_context
+def search_command(
+    ctx: click.Context,
+    query: str,
+    project: str | None,
+    limit: int,
+    comments: bool,
+) -> None:
+    """Search the vector index with a query.
+
+    Test semantic search directly from the command line.
+
+    Example: mcp-atlassian-vector search "authentication bugs"
+    """
+    from mcp_atlassian.vector.embeddings import EmbeddingPipeline
+    from mcp_atlassian.vector.store import LanceDBStore
+
+    try:
+        config = VectorConfig.from_env()
+        store = LanceDBStore(config=config)
+        embedder = EmbeddingPipeline(config=config)
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            click.secho(
+                "Vector index is empty. Run 'mcp-atlassian-vector sync --full' first.",
+                fg="yellow",
+            )
+            return
+
+        click.echo(f"Searching for: {query}")
+        click.echo("")
+
+        # Generate embedding
+        query_vector = asyncio.run(embedder.embed(query))
+
+        # Build filters
+        filters = {}
+        if project:
+            filters["project_key"] = project
+
+        # Search
+        if comments:
+            if stats["total_comments"] == 0:
+                click.secho("No comments indexed.", fg="yellow")
+                return
+            results = store.search_comments(
+                query_vector=query_vector,
+                limit=limit,
+                filters=filters if filters else None,
+            )
+            click.echo(f"Found {len(results)} matching comments:")
+            click.echo("-" * 60)
+            for r in results:
+                score = round(r.get("score", 0), 3)
+                click.echo(f"[{score}] {r['issue_key']} - {r['author']}")
+                click.echo(f"    {r['body_preview'][:100]}...")
+                click.echo("")
+        else:
+            results = store.hybrid_search(
+                query_vector=query_vector,
+                query_text=query,
+                limit=limit,
+                filters=filters if filters else None,
+            )
+            click.echo(f"Found {len(results)} matching issues:")
+            click.echo("-" * 60)
+            for r in results:
+                score = round(r.get("score", 0), 3)
+                click.echo(f"[{score}] {r['issue_id']} - {r['summary'][:60]}")
+                click.echo(f"    Type: {r['issue_type']} | Status: {r['status']}")
+                click.echo("")
+
+    except Exception as e:
+        click.secho(f"Error: {e}", fg="red", err=True)
+        raise SystemExit(1) from e
+
+
+@vector_cli.command("export")
+@click.argument("output_path", type=click.Path())
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["json", "parquet"]),
+    default="json",
+    help="Export format (default: json)",
+)
+@click.pass_context
+def export_command(
+    ctx: click.Context,
+    output_path: str,
+    export_format: str,
+) -> None:
+    """Export vector index data for backup.
+
+    Creates a backup of the indexed issues and comments.
+
+    Example: mcp-atlassian-vector export ./backup.json
+    """
+    import json
+    from pathlib import Path
+
+    from mcp_atlassian.vector.store import LanceDBStore
+
+    try:
+        config = VectorConfig.from_env()
+        store = LanceDBStore(config=config)
+
+        click.echo("Exporting vector index...")
+
+        # Get data
+        issues_df = store.issues_table.to_pandas()
+        comments_df = store.comments_table.to_pandas()
+
+        output = Path(output_path)
+
+        if export_format == "parquet":
+            # Export as parquet files
+            issues_path = output.with_suffix(".issues.parquet")
+            comments_path = output.with_suffix(".comments.parquet")
+
+            issues_df.to_parquet(issues_path, index=False)
+            comments_df.to_parquet(comments_path, index=False)
+
+            click.echo(f"Exported {len(issues_df)} issues to {issues_path}")
+            click.echo(f"Exported {len(comments_df)} comments to {comments_path}")
+
+        else:
+            # Export as JSON (without vectors to save space)
+            export_data = {
+                "metadata": {
+                    "exported_at": str(asyncio.run(_get_utc_now())),
+                    "total_issues": len(issues_df),
+                    "total_comments": len(comments_df),
+                    "db_path": str(config.db_path),
+                },
+                "issues": issues_df.drop(columns=["vector"]).to_dict(orient="records"),
+                "comments": (
+                    comments_df.drop(columns=["vector"]).to_dict(orient="records")
+                    if len(comments_df) > 0
+                    else []
+                ),
+            }
+
+            output.write_text(json.dumps(export_data, indent=2, default=str))
+            click.echo(f"Exported {len(issues_df)} issues to {output}")
+            click.echo(f"Exported {len(comments_df)} comments to {output}")
+
+        click.secho("Export complete!", fg="green")
+
+    except Exception as e:
+        click.secho(f"Error: {e}", fg="red", err=True)
+        raise SystemExit(1) from e
+
+
+async def _get_utc_now() -> str:
+    """Get current UTC time as ISO string."""
+    from datetime import datetime
+    return datetime.utcnow().isoformat()
+
+
 def main() -> None:
     """Entry point for vector CLI."""
     vector_cli()

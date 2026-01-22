@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from openai import AsyncOpenAI
 
@@ -16,6 +17,13 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# Default local embedding model
+DEFAULT_LOCAL_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+
+# Lazy-loaded sentence transformers model
+_local_model: Any = None
+_local_model_name: str | None = None
 
 
 def chunked(iterable: list, size: int) -> list[list]:
@@ -126,9 +134,11 @@ class EmbeddingPipeline:
                 if self.config.embedding_provider == EmbeddingProvider.OPENAI:
                     batch_embeddings = await self._embed_openai(batch_texts)
                 else:
-                    batch_embeddings = [
-                        await self._embed_local(t) for t in batch_texts
-                    ]
+                    # Use batch local embedding for efficiency
+                    loop = asyncio.get_event_loop()
+                    batch_embeddings = await loop.run_in_executor(
+                        None, self._embed_local_batch_sync, batch_texts
+                    )
 
                 # Store results and cache
                 for idx, text, embedding in zip(
@@ -200,8 +210,8 @@ class EmbeddingPipeline:
     async def _embed_local(self, text: str) -> list[float]:
         """Generate embedding using local model.
 
-        TODO: Implement local embedding support with sentence-transformers
-        or similar library for offline/air-gapped deployments.
+        Uses sentence-transformers with nomic-embed-text or similar model
+        for offline/air-gapped deployments.
 
         Args:
             text: Text to embed
@@ -209,10 +219,88 @@ class EmbeddingPipeline:
         Returns:
             Embedding vector
         """
-        raise NotImplementedError(
-            "Local embeddings not yet implemented. "
-            "Set VECTOR_EMBEDDING_PROVIDER=openai to use OpenAI embeddings."
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._embed_local_sync, text)
+
+    def _embed_local_sync(self, text: str) -> list[float]:
+        """Synchronous local embedding generation.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            Embedding vector
+        """
+        model = self._get_local_model()
+
+        # Add task prefix for nomic model
+        if "nomic" in self.config.embedding_model.lower():
+            text = f"search_document: {text}"
+
+        embedding = model.encode(text, convert_to_numpy=True)
+        return embedding.tolist()
+
+    def _embed_local_batch_sync(self, texts: list[str]) -> list[list[float]]:
+        """Synchronous batch local embedding generation.
+
+        Args:
+            texts: Texts to embed
+
+        Returns:
+            List of embedding vectors
+        """
+        model = self._get_local_model()
+
+        # Add task prefix for nomic model
+        if "nomic" in self.config.embedding_model.lower():
+            texts = [f"search_document: {t}" for t in texts]
+
+        embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+        return [emb.tolist() for emb in embeddings]
+
+    def _get_local_model(self) -> Any:
+        """Get or load local embedding model.
+
+        Returns:
+            Loaded SentenceTransformer model
+        """
+        global _local_model, _local_model_name
+
+        model_name = self.config.embedding_model
+        if model_name == "text-embedding-3-small":
+            # Default local model when provider is local but model not specified
+            model_name = DEFAULT_LOCAL_MODEL
+
+        # Return cached model if same
+        if _local_model is not None and _local_model_name == model_name:
+            return _local_model
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            raise ImportError(
+                "sentence-transformers is required for local embeddings. "
+                "Install with: pip install sentence-transformers"
+            ) from e
+
+        logger.info(f"Loading local embedding model: {model_name}")
+
+        # Set cache directory
+        cache_dir = self.config.db_path / "models"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load model with trust_remote_code for nomic
+        trust_remote_code = "nomic" in model_name.lower()
+        _local_model = SentenceTransformer(
+            model_name,
+            cache_folder=str(cache_dir),
+            trust_remote_code=trust_remote_code,
         )
+        _local_model_name = model_name
+
+        logger.info(f"Loaded model with dimension: {_local_model.get_sentence_embedding_dimension()}")
+        return _local_model
 
     def clear_cache(self) -> None:
         """Clear the embedding cache."""

@@ -100,6 +100,69 @@ Documentation is also available in [llms.txt format](https://llmstxt.org/), whic
 
 See [Tools Reference](https://personal-1d37018d.mintlify.app/docs/tools-reference) for the complete list.
 
+## Vector Search (Semantic Search)
+
+Enable semantic search across your Jira issues using vector embeddings. Find issues by meaning, not just keywords.
+
+### Setup
+
+Add your OpenAI API key (or use local embeddings):
+
+```json
+{
+  "env": {
+    "OPENAI_API_KEY": "sk-...",
+    "VECTOR_EMBEDDING_PROVIDER": "openai"
+  }
+}
+```
+
+For offline/air-gapped deployments, use local embeddings:
+
+```json
+{
+  "env": {
+    "VECTOR_EMBEDDING_PROVIDER": "local"
+  }
+}
+```
+
+### Sync Issues
+
+```bash
+# Initial full sync
+mcp-atlassian-vector sync --full --projects DS,ENG
+
+# Incremental sync (only changed issues)
+mcp-atlassian-vector sync
+
+# Check status
+mcp-atlassian-vector status
+
+# Test search
+mcp-atlassian-vector search "API rate limiting"
+```
+
+### Vector Search Tools
+
+| Tool | Description |
+|------|-------------|
+| `jira_semantic_search` | Find issues by meaning |
+| `jira_knowledge_query` | Natural language queries with auto-filters |
+| `jira_find_similar` | Find related issues |
+| `jira_detect_duplicates` | Check for duplicates before creating |
+| `jira_project_insights` | Aggregated patterns and analytics |
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VECTOR_EMBEDDING_PROVIDER` | `openai` | `openai` or `local` |
+| `VECTOR_EMBEDDING_MODEL` | `text-embedding-3-small` | Model for embeddings |
+| `VECTOR_DB_PATH` | `./data/lancedb` | Vector database location |
+| `VECTOR_SYNC_PROJECTS` | `*` | Projects to sync (comma-separated or `*`) |
+| `VECTOR_SYNC_INTERVAL_MINUTES` | `30` | Background sync interval |
+
 ## Security
 
 Never share API tokens. Keep `.env` files secure. See [SECURITY.md](SECURITY.md).
