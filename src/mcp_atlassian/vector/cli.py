@@ -223,6 +223,51 @@ def compact_command(ctx: click.Context) -> None:
         raise SystemExit(1) from e
 
 
+@vector_cli.command("daemon")
+@click.option(
+    "--interval",
+    type=int,
+    default=30,
+    help="Sync interval in minutes (default: 30)",
+)
+@click.option(
+    "--projects",
+    type=str,
+    help="Comma-separated project keys to sync (e.g., 'PROJ,ENG')",
+)
+@click.pass_context
+def daemon_command(ctx: click.Context, interval: int, projects: str | None) -> None:
+    """Run background sync daemon.
+
+    Continuously syncs Jira issues to the vector store at regular intervals.
+    Press Ctrl+C to stop.
+    """
+    from mcp_atlassian.vector.scheduler import run_daemon
+
+    click.echo(f"Starting sync daemon (interval: {interval} minutes)...")
+
+    # Parse projects
+    if projects:
+        project_list = [p.strip() for p in projects.split(",")]
+        click.echo(f"Projects: {', '.join(project_list)}")
+
+    try:
+        jira = get_jira_facade()
+        config = VectorConfig.from_env()
+
+        # Override sync projects if specified
+        if projects:
+            config.sync_projects = [p.strip() for p in projects.split(",")]
+
+        asyncio.run(run_daemon(jira, config=config, interval_minutes=interval))
+
+    except KeyboardInterrupt:
+        click.echo("\nDaemon stopped.")
+    except Exception as e:
+        click.secho(f"Error: {e}", fg="red", err=True)
+        raise SystemExit(1) from e
+
+
 def main() -> None:
     """Entry point for vector CLI."""
     vector_cli()
