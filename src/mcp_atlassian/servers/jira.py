@@ -172,6 +172,41 @@ async def get_issue(
 
 @jira_mcp.tool(
     tags={"jira", "read"},
+    annotations={"title": "Get Issue Summary", "readOnlyHint": True},
+)
+async def get_issue_summary(
+    ctx: Context,
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+) -> str:
+    """Get a compressed summary of a Jira issue for quick reference.
+
+    Returns minimal fields: key, summary, status, priority, assignee, type, updated.
+    Use jira_get_issue for full details.
+
+    Args:
+        ctx: The FastMCP context.
+        issue_key: Jira issue key.
+
+    Returns:
+        JSON string with compressed issue summary.
+
+    Raises:
+        ValueError: If the Jira client is not configured or available.
+    """
+    jira = await get_jira_fetcher(ctx)
+    issue = jira.get_issue(
+        issue_key=issue_key,
+        fields=["summary", "status", "priority", "assignee", "issuetype", "updated"],
+        comment_limit=0,
+        update_history=False,
+    )
+    result = issue.to_simplified_dict()
+    compressed = ResponseFormatter.compress_issue(result, include_description=False)
+    return json.dumps(compressed, indent=2, ensure_ascii=False)
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
     annotations={"title": "Search Issues", "readOnlyHint": True},
 )
 async def search(
@@ -271,6 +306,82 @@ async def search(
 
     if compact:
         result = ResponseFormatter.compress_search_result(result)
+
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "List Issues", "readOnlyHint": True},
+)
+async def list_issues(
+    ctx: Context,
+    project: Annotated[
+        str | None,
+        Field(
+            description="Project key to list issues from (e.g., 'PROJ'). If not provided, lists issues across all projects.",
+            default=None,
+        ),
+    ] = None,
+    status: Annotated[
+        str | None,
+        Field(
+            description="Filter by status (e.g., 'In Progress', 'Done'). Case-insensitive.",
+            default=None,
+        ),
+    ] = None,
+    assignee: Annotated[
+        str | None,
+        Field(
+            description="Filter by assignee. Use 'currentUser()' for your issues, or provide username/email.",
+            default=None,
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(description="Maximum number of results (1-50)", default=10, ge=1),
+    ] = 10,
+) -> str:
+    """List Jira issues with simple filters. Returns compressed results for quick browsing.
+
+    For complex queries, use jira_search with JQL instead.
+    For full issue details, use jira_get_issue.
+
+    Args:
+        ctx: The FastMCP context.
+        project: Project key to filter by.
+        status: Status to filter by.
+        assignee: Assignee to filter by.
+        limit: Maximum number of results.
+
+    Returns:
+        JSON string with compressed issue list.
+    """
+    jira = await get_jira_fetcher(ctx)
+
+    # Build JQL from simple filters
+    conditions = []
+    if project:
+        conditions.append(f"project = {project}")
+    if status:
+        conditions.append(f"status = '{status}'")
+    if assignee:
+        if assignee.lower() == "currentuser()":
+            conditions.append("assignee = currentUser()")
+        else:
+            conditions.append(f"assignee = '{assignee}'")
+
+    jql = " AND ".join(conditions) if conditions else "ORDER BY updated DESC"
+    if conditions:
+        jql += " ORDER BY updated DESC"
+
+    search_result = jira.search(
+        jql=jql,
+        fields=["summary", "status", "priority", "assignee", "issuetype", "updated"],
+        limit=limit,
+    )
+    result = search_result.to_simplified_dict()
+    result = ResponseFormatter.compress_search_result(result, include_description=False)
 
     return json.dumps(result, indent=2, ensure_ascii=False)
 
