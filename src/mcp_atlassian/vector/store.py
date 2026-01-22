@@ -1,0 +1,542 @@
+"""LanceDB vector store for Jira issues."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+import lancedb
+
+from mcp_atlassian.vector.config import VectorConfig
+from mcp_atlassian.vector.schemas import JiraCommentEmbedding, JiraIssueEmbedding
+
+if TYPE_CHECKING:
+    from lancedb.table import Table
+
+logger = logging.getLogger(__name__)
+
+# Table names
+ISSUES_TABLE = "jira_issues"
+COMMENTS_TABLE = "jira_comments"
+
+
+class LanceDBStore:
+    """Vector store for Jira issues using LanceDB.
+
+    Provides CRUD operations, vector search, and hybrid search capabilities
+    for Jira issues and comments.
+    """
+
+    def __init__(self, config: VectorConfig | None = None) -> None:
+        """Initialize the LanceDB store.
+
+        Args:
+            config: Vector configuration. Uses defaults from env if not provided.
+        """
+        self.config = config or VectorConfig.from_env()
+        self._db: lancedb.DBConnection | None = None
+        self._issues_table: Table | None = None
+        self._comments_table: Table | None = None
+
+    @property
+    def db(self) -> lancedb.DBConnection:
+        """Get or create database connection."""
+        if self._db is None:
+            db_path = self.config.ensure_db_path()
+            self._db = lancedb.connect(str(db_path))
+            logger.info(f"Connected to LanceDB at {db_path}")
+        return self._db
+
+    @property
+    def issues_table(self) -> Table:
+        """Get or create issues table."""
+        if self._issues_table is None:
+            self._issues_table = self._get_or_create_table(
+                ISSUES_TABLE, JiraIssueEmbedding
+            )
+        return self._issues_table
+
+    @property
+    def comments_table(self) -> Table:
+        """Get or create comments table."""
+        if self._comments_table is None:
+            self._comments_table = self._get_or_create_table(
+                COMMENTS_TABLE, JiraCommentEmbedding
+            )
+        return self._comments_table
+
+    def _get_or_create_table(
+        self,
+        name: str,
+        schema: type[JiraIssueEmbedding] | type[JiraCommentEmbedding],
+    ) -> Table:
+        """Get existing table or create new one with schema.
+
+        Args:
+            name: Table name
+            schema: Pydantic model defining the schema
+
+        Returns:
+            LanceDB table
+        """
+        if name in self.db.table_names():
+            logger.debug(f"Opening existing table: {name}")
+            return self.db.open_table(name)
+
+        logger.info(f"Creating new table: {name}")
+        # Create empty table with schema
+        return self.db.create_table(name, schema=schema)
+
+    def upsert_issues(self, issues: list[JiraIssueEmbedding]) -> int:
+        """Upsert multiple issues into the store.
+
+        Args:
+            issues: List of issue embeddings to upsert
+
+        Returns:
+            Number of issues upserted
+        """
+        if not issues:
+            return 0
+
+        # Convert to dicts for LanceDB
+        records = [issue.model_dump() for issue in issues]
+
+        # Get existing issue IDs
+        existing_ids = set(self._get_existing_issue_ids([i.issue_id for i in issues]))
+
+        # Split into updates and inserts
+        updates = [r for r in records if r["issue_id"] in existing_ids]
+        inserts = [r for r in records if r["issue_id"] not in existing_ids]
+
+        # Delete existing records that will be updated
+        if updates:
+            update_ids = [r["issue_id"] for r in updates]
+            self.issues_table.delete(f"issue_id IN {tuple(update_ids)}")
+            logger.debug(f"Deleted {len(updates)} existing issues for update")
+
+        # Add all records
+        all_records = updates + inserts
+        if all_records:
+            self.issues_table.add(all_records)
+            logger.info(
+                f"Upserted {len(all_records)} issues "
+                f"({len(inserts)} new, {len(updates)} updated)"
+            )
+
+        return len(all_records)
+
+    def upsert_comments(self, comments: list[JiraCommentEmbedding]) -> int:
+        """Upsert multiple comments into the store.
+
+        Args:
+            comments: List of comment embeddings to upsert
+
+        Returns:
+            Number of comments upserted
+        """
+        if not comments:
+            return 0
+
+        records = [comment.model_dump() for comment in comments]
+
+        # Get existing comment IDs
+        existing_ids = set(
+            self._get_existing_comment_ids([c.comment_id for c in comments])
+        )
+
+        # Split into updates and inserts
+        updates = [r for r in records if r["comment_id"] in existing_ids]
+        inserts = [r for r in records if r["comment_id"] not in existing_ids]
+
+        # Delete existing records that will be updated
+        if updates:
+            update_ids = [r["comment_id"] for r in updates]
+            self.comments_table.delete(f"comment_id IN {tuple(update_ids)}")
+
+        # Add all records
+        all_records = updates + inserts
+        if all_records:
+            self.comments_table.add(all_records)
+            logger.info(
+                f"Upserted {len(all_records)} comments "
+                f"({len(inserts)} new, {len(updates)} updated)"
+            )
+
+        return len(all_records)
+
+    def _get_existing_issue_ids(self, issue_ids: list[str]) -> list[str]:
+        """Get which issue IDs already exist in the store."""
+        if not issue_ids:
+            return []
+
+        try:
+            # Query for existing IDs
+            result = (
+                self.issues_table.search()
+                .where(f"issue_id IN {tuple(issue_ids)}", prefilter=True)
+                .select(["issue_id"])
+                .limit(len(issue_ids))
+                .to_list()
+            )
+            return [r["issue_id"] for r in result]
+        except Exception:
+            # Table might be empty
+            return []
+
+    def _get_existing_comment_ids(self, comment_ids: list[str]) -> list[str]:
+        """Get which comment IDs already exist in the store."""
+        if not comment_ids:
+            return []
+
+        try:
+            result = (
+                self.comments_table.search()
+                .where(f"comment_id IN {tuple(comment_ids)}", prefilter=True)
+                .select(["comment_id"])
+                .limit(len(comment_ids))
+                .to_list()
+            )
+            return [r["comment_id"] for r in result]
+        except Exception:
+            return []
+
+    def get_issue_by_key(self, issue_key: str) -> JiraIssueEmbedding | None:
+        """Get a single issue by its key.
+
+        Args:
+            issue_key: Jira issue key (e.g., PROJ-123)
+
+        Returns:
+            Issue embedding or None if not found
+        """
+        try:
+            results = (
+                self.issues_table.search()
+                .where(f"issue_id = '{issue_key}'", prefilter=True)
+                .limit(1)
+                .to_list()
+            )
+            if results:
+                return JiraIssueEmbedding(**results[0])
+            return None
+        except Exception as e:
+            logger.warning(f"Error getting issue {issue_key}: {e}")
+            return None
+
+    def search_issues(
+        self,
+        query_vector: list[float],
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search issues by vector similarity.
+
+        Args:
+            query_vector: Query embedding vector
+            limit: Maximum results to return
+            filters: Optional metadata filters
+
+        Returns:
+            List of matching issues with scores
+        """
+        search = self.issues_table.search(query_vector).limit(limit)
+
+        # Apply filters
+        if filters:
+            where_clause = self._build_where_clause(filters)
+            if where_clause:
+                search = search.where(where_clause, prefilter=True)
+
+        results = search.to_list()
+
+        # Add similarity score
+        for r in results:
+            r["score"] = 1 - r.get("_distance", 0)  # Convert distance to similarity
+
+        return results
+
+    def hybrid_search(
+        self,
+        query_vector: list[float],
+        query_text: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+        fts_weight: float = 0.3,
+    ) -> list[dict[str, Any]]:
+        """Hybrid search combining vector and full-text search.
+
+        Args:
+            query_vector: Query embedding vector
+            query_text: Query text for FTS
+            limit: Maximum results to return
+            filters: Optional metadata filters
+            fts_weight: Weight for FTS score (0-1), vector gets 1-fts_weight
+
+        Returns:
+            List of matching issues with combined scores
+        """
+        # Vector search
+        vector_results = self.search_issues(
+            query_vector, limit=limit * 2, filters=filters
+        )
+
+        # Full-text search on summary and description
+        fts_results = self._full_text_search(
+            query_text, limit=limit * 2, filters=filters
+        )
+
+        # Combine results with score fusion
+        combined = self._fuse_results(
+            vector_results, fts_results, fts_weight=fts_weight
+        )
+
+        # Sort by combined score and limit
+        combined.sort(key=lambda x: x["score"], reverse=True)
+        return combined[:limit]
+
+    def _full_text_search(
+        self,
+        query_text: str,
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Perform full-text search on summary and description.
+
+        Note: LanceDB FTS requires creating an FTS index. For now, we use
+        a simple LIKE-based search as fallback.
+        """
+        try:
+            # Try FTS if available
+            search = self.issues_table.search(query_text, query_type="fts").limit(limit)
+
+            if filters:
+                where_clause = self._build_where_clause(filters)
+                if where_clause:
+                    search = search.where(where_clause, prefilter=True)
+
+            results = search.to_list()
+            for r in results:
+                r["score"] = r.get("_score", 0.5)
+            return results
+
+        except Exception:
+            # Fallback to LIKE search
+            logger.debug("FTS not available, using LIKE search")
+            return self._like_search(query_text, limit, filters)
+
+    def _like_search(
+        self,
+        query_text: str,
+        limit: int,
+        filters: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Fallback search using LIKE queries."""
+        # Escape special characters
+        query_escaped = query_text.replace("'", "''").lower()
+
+        where_parts = [
+            f"(lower(summary) LIKE '%{query_escaped}%' "
+            f"OR lower(description_preview) LIKE '%{query_escaped}%')"
+        ]
+
+        if filters:
+            filter_clause = self._build_where_clause(filters)
+            if filter_clause:
+                where_parts.append(filter_clause)
+
+        where_clause = " AND ".join(where_parts)
+
+        try:
+            results = (
+                self.issues_table.search()
+                .where(where_clause, prefilter=True)
+                .limit(limit)
+                .to_list()
+            )
+            # Assign a base score for text matches
+            for r in results:
+                r["score"] = 0.5
+            return results
+        except Exception as e:
+            logger.warning(f"LIKE search failed: {e}")
+            return []
+
+    def _fuse_results(
+        self,
+        vector_results: list[dict[str, Any]],
+        fts_results: list[dict[str, Any]],
+        fts_weight: float,
+    ) -> list[dict[str, Any]]:
+        """Fuse vector and FTS results using weighted combination."""
+        vector_weight = 1 - fts_weight
+
+        # Build lookup by issue_id
+        combined: dict[str, dict[str, Any]] = {}
+
+        for r in vector_results:
+            issue_id = r["issue_id"]
+            combined[issue_id] = r.copy()
+            combined[issue_id]["vector_score"] = r.get("score", 0)
+            combined[issue_id]["fts_score"] = 0
+
+        for r in fts_results:
+            issue_id = r["issue_id"]
+            if issue_id in combined:
+                combined[issue_id]["fts_score"] = r.get("score", 0)
+            else:
+                combined[issue_id] = r.copy()
+                combined[issue_id]["vector_score"] = 0
+                combined[issue_id]["fts_score"] = r.get("score", 0)
+
+        # Calculate combined scores
+        for r in combined.values():
+            r["score"] = (
+                vector_weight * r.get("vector_score", 0)
+                + fts_weight * r.get("fts_score", 0)
+            )
+
+        return list(combined.values())
+
+    def _build_where_clause(self, filters: dict[str, Any]) -> str:
+        """Build SQL WHERE clause from filter dict.
+
+        Supports:
+            - Simple equality: {"status": "Open"}
+            - $in operator: {"project_key": {"$in": ["PROJ", "ENG"]}}
+            - $nin operator: {"status": {"$nin": ["Done", "Closed"]}}
+            - $gte/$lte: {"created_at": {"$gte": "2024-01-01"}}
+            - $ne: {"status": {"$ne": "Done"}}
+        """
+        clauses = []
+
+        for field, value in filters.items():
+            if isinstance(value, dict):
+                # Operator-based filter
+                for op, operand in value.items():
+                    clause = self._build_operator_clause(field, op, operand)
+                    if clause:
+                        clauses.append(clause)
+            else:
+                # Simple equality
+                if isinstance(value, str):
+                    clauses.append(f"{field} = '{value}'")
+                elif isinstance(value, bool):
+                    clauses.append(f"{field} = {str(value).lower()}")
+                elif isinstance(value, int | float):
+                    clauses.append(f"{field} = {value}")
+
+        return " AND ".join(clauses)
+
+    def _build_operator_clause(
+        self, field: str, op: str, operand: Any
+    ) -> str | None:
+        """Build WHERE clause for a single operator."""
+        if op == "$in":
+            if isinstance(operand, list) and operand:
+                values = ", ".join(f"'{v}'" for v in operand)
+                return f"{field} IN ({values})"
+        elif op == "$nin":
+            if isinstance(operand, list) and operand:
+                values = ", ".join(f"'{v}'" for v in operand)
+                return f"{field} NOT IN ({values})"
+        elif op == "$ne":
+            if isinstance(operand, str):
+                return f"{field} != '{operand}'"
+            return f"{field} != {operand}"
+        elif op == "$gte":
+            if isinstance(operand, str):
+                return f"{field} >= '{operand}'"
+            return f"{field} >= {operand}"
+        elif op == "$lte":
+            if isinstance(operand, str):
+                return f"{field} <= '{operand}'"
+            return f"{field} <= {operand}"
+        elif op == "$gt":
+            if isinstance(operand, str):
+                return f"{field} > '{operand}'"
+            return f"{field} > {operand}"
+        elif op == "$lt":
+            if isinstance(operand, str):
+                return f"{field} < '{operand}'"
+            return f"{field} < {operand}"
+
+        return None
+
+    def delete_issues(self, issue_ids: list[str]) -> int:
+        """Delete issues by their keys.
+
+        Args:
+            issue_ids: List of issue keys to delete
+
+        Returns:
+            Number of issues deleted
+        """
+        if not issue_ids:
+            return 0
+
+        self.issues_table.delete(f"issue_id IN {tuple(issue_ids)}")
+        logger.info(f"Deleted {len(issue_ids)} issues")
+        return len(issue_ids)
+
+    def get_all_issue_ids(self, project_key: str | None = None) -> list[str]:
+        """Get all indexed issue IDs, optionally filtered by project.
+
+        Args:
+            project_key: Optional project key filter
+
+        Returns:
+            List of issue IDs
+        """
+        try:
+            search = self.issues_table.search().select(["issue_id"])
+
+            if project_key:
+                search = search.where(
+                    f"project_key = '{project_key}'", prefilter=True
+                )
+
+            results = search.limit(1000000).to_list()
+            return [r["issue_id"] for r in results]
+        except Exception:
+            return []
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get statistics about the vector store.
+
+        Returns:
+            Dictionary with stats about indexed issues and comments
+        """
+        try:
+            issue_count = len(self.issues_table.to_pandas())
+        except Exception:
+            issue_count = 0
+
+        try:
+            comment_count = len(self.comments_table.to_pandas())
+        except Exception:
+            comment_count = 0
+
+        # Get unique projects
+        try:
+            issues_df = self.issues_table.to_pandas()
+            if len(issues_df) > 0:
+                projects = issues_df["project_key"].unique().tolist()
+            else:
+                projects = []
+        except Exception:
+            projects = []
+
+        return {
+            "total_issues": issue_count,
+            "total_comments": comment_count,
+            "projects": projects,
+            "db_path": str(self.config.db_path),
+        }
+
+    def compact(self) -> None:
+        """Compact the database to optimize storage."""
+        logger.info("Compacting LanceDB...")
+        self.issues_table.compact_files()
+        self.comments_table.compact_files()
+        logger.info("Compaction complete")

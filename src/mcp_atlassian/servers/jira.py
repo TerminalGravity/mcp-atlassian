@@ -2020,3 +2020,13 @@ async def jira_get_issue_sla(
         logger.error(f"Error calculating SLA for {issue_key}: {str(e)}")
         error_result = {"success": False, "error": str(e), "issue_key": issue_key}
         return json.dumps(error_result, indent=2, ensure_ascii=False)
+
+
+# Import vector tools to register them on jira_mcp
+# This must be at the end to avoid circular imports
+try:
+    from mcp_atlassian.servers import vector_tools  # noqa: F401
+
+    logger.debug("Vector search tools registered successfully")
+except ImportError as e:
+    logger.debug(f"Vector search tools not available: {e}")

@@ -42,6 +42,7 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 mcp-atlassian = "mcp_atlassian:main"
+mcp-atlassian-vector = "mcp_atlassian.vector.cli:main"
 
 [dependency-groups]
 dev = [
@@ -98,6 +99,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "src/mcp_atlassian/server.py" = ["E501"]
 "src/mcp_atlassian/servers/jira.py" = ["E501", "FBT"]
 "src/mcp_atlassian/jira/response_formatter.py" = ["FBT"]
+# Vector module: BLE001 for db ops, S324 for cache hash, FBT for Click, DTZ for existing patterns
+"src/mcp_atlassian/vector/*.py" = ["BLE001", "S324", "FBT", "DTZ"]
+"src/mcp_atlassian/servers/vector_tools.py" = ["E501", "BLE001", "FBT", "S110"]
 
 [tool.ruff.format]
 quote-style = "double"
