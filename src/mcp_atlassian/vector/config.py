@@ -26,6 +26,7 @@ class VectorConfig:
         VECTOR_SYNC_ENABLED: Enable background sync
         VECTOR_SYNC_INTERVAL_MINUTES: Sync interval
         VECTOR_SYNC_PROJECTS: Comma-separated project keys or '*'
+        VECTOR_SYNC_COMMENTS: Enable comment indexing (default: true)
         VECTOR_BATCH_SIZE: Batch size for embedding operations
         VECTOR_SELF_QUERY_MODEL: LLM model for self-query parsing
         MCP_MAX_RESPONSE_TOKENS: Max tokens in MCP responses
@@ -65,6 +66,10 @@ class VectorConfig:
         default_factory=lambda: _parse_projects(
             os.getenv("VECTOR_SYNC_PROJECTS", "*")
         )
+    )
+    sync_comments: bool = field(
+        default_factory=lambda: os.getenv("VECTOR_SYNC_COMMENTS", "true").lower()
+        == "true"
     )
 
     # Performance

@@ -2,6 +2,7 @@
 
 from mcp_atlassian.vector.config import VectorConfig
 from mcp_atlassian.vector.embeddings import EmbeddingPipeline
+from mcp_atlassian.vector.insights import InsightsEngine
 from mcp_atlassian.vector.scheduler import SyncScheduler
 from mcp_atlassian.vector.schemas import JiraCommentEmbedding, JiraIssueEmbedding
 from mcp_atlassian.vector.self_query import ParsedQuery, SelfQueryParser
@@ -16,4 +17,5 @@ __all__ = [
     "SelfQueryParser",
     "ParsedQuery",
     "SyncScheduler",
+    "InsightsEngine",
 ]

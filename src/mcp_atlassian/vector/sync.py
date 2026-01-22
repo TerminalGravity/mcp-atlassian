@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -12,9 +13,11 @@ from typing import TYPE_CHECKING, Any
 from mcp_atlassian.vector.config import VectorConfig
 from mcp_atlassian.vector.embeddings import EmbeddingPipeline
 from mcp_atlassian.vector.schemas import (
+    JiraCommentEmbedding,
     JiraIssueEmbedding,
     clean_jira_markup,
     compute_content_hash,
+    prepare_comment_for_embedding,
     prepare_issue_for_embedding,
     truncate_at_sentence,
 )
@@ -102,6 +105,8 @@ class SyncResult:
     issues_processed: int = 0
     issues_embedded: int = 0
     issues_skipped: int = 0
+    comments_processed: int = 0
+    comments_embedded: int = 0
     errors: list[str] = field(default_factory=list)
     duration_seconds: float = 0.0
 
@@ -332,9 +337,20 @@ class VectorSyncEngine:
                     issue_dict["content_hash"] = content_hash
                     issues_to_embed.append(issue_dict)
 
-                    # Track max updated time
-                    if issue_dict["updated_at"] > max_updated:
-                        max_updated = issue_dict["updated_at"]
+                    # Track max updated time (parse string to datetime for comparison)
+                    updated_at_str = issue_dict["updated_at"]
+                    if isinstance(updated_at_str, str):
+                        try:
+                            updated_at_dt = datetime.fromisoformat(
+                                updated_at_str.replace("Z", "+00:00")
+                            )
+                        except ValueError:
+                            updated_at_dt = datetime.utcnow()
+                    else:
+                        updated_at_dt = updated_at_str
+
+                    if updated_at_dt > max_updated:
+                        max_updated = updated_at_dt
 
                 # Embed and store in batches
                 if len(issues_to_embed) >= self.config.batch_size:
@@ -362,6 +378,27 @@ class VectorSyncEngine:
         # Update state with max updated time
         if max_updated > state.last_issue_updated:
             state.last_issue_updated = max_updated
+
+        # Sync comments for embedded issues (if enabled)
+        if self.config.sync_comments and result.issues_embedded > 0:
+            all_issue_keys = self.store.get_all_issue_ids(project_key=project_key)
+            # Limit to recently processed issues for incremental sync
+            if incremental:
+                # Only sync comments for issues that were just embedded
+                issue_keys_to_sync = [
+                    i["issue_id"] for i in issues_to_embed
+                ] if issues_to_embed else []
+            else:
+                issue_keys_to_sync = all_issue_keys[:100]  # Limit for full sync
+
+            if issue_keys_to_sync:
+                logger.info(f"Syncing comments for {len(issue_keys_to_sync)} issues")
+                comments_processed, comments_embedded, comment_errors = (
+                    await self._sync_comments_for_issues(issue_keys_to_sync)
+                )
+                result.comments_processed += comments_processed
+                result.comments_embedded += comments_embedded
+                result.errors.extend(comment_errors)
 
         return result
 
@@ -420,6 +457,203 @@ class VectorSyncEngine:
 
         return count
 
+    async def _sync_comments_for_issues(
+        self,
+        issue_keys: list[str],
+    ) -> tuple[int, int, list[str]]:
+        """Fetch and embed comments for a list of issues.
+
+        Args:
+            issue_keys: List of issue keys to fetch comments for
+
+        Returns:
+            Tuple of (comments_processed, comments_embedded, errors)
+        """
+        comments_processed = 0
+        comments_embedded = 0
+        errors: list[str] = []
+        comments_to_embed: list[dict[str, Any]] = []
+
+        for issue_key in issue_keys:
+            try:
+                # Fetch comments via Jira API
+                comments_result = self.jira.get_issue_comments(issue_key)
+                if not comments_result:
+                    continue
+
+                # Get parent issue info for denormalization
+                issue = self.store.get_issue_by_key(issue_key)
+                if not issue:
+                    continue
+
+                issue_dict = {
+                    "issue_id": issue.issue_id,
+                    "summary": issue.summary,
+                    "project_key": issue.project_key,
+                    "issue_type": issue.issue_type,
+                    "status": issue.status,
+                }
+
+                for comment in comments_result:
+                    comments_processed += 1
+                    comment_dict = self._comment_to_dict(comment, issue_dict)
+                    if comment_dict:
+                        comments_to_embed.append(comment_dict)
+
+                # Embed in batches
+                if len(comments_to_embed) >= self.config.batch_size:
+                    count = await self._embed_and_store_comments(comments_to_embed)
+                    comments_embedded += count
+                    comments_to_embed = []
+
+            except Exception as e:
+                error_msg = f"Error fetching comments for {issue_key}: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Process remaining comments
+        if comments_to_embed:
+            count = await self._embed_and_store_comments(comments_to_embed)
+            comments_embedded += count
+
+        return comments_processed, comments_embedded, errors
+
+    async def _embed_and_store_comments(
+        self,
+        comments: list[dict[str, Any]],
+    ) -> int:
+        """Embed comments and store in vector database.
+
+        Args:
+            comments: List of comment dictionaries to embed
+
+        Returns:
+            Number of comments successfully embedded
+        """
+        if not comments:
+            return 0
+
+        # Prepare texts for embedding
+        texts = []
+        for comment in comments:
+            issue_dict = {
+                "issue_id": comment["issue_key"],
+                "summary": comment.get("issue_summary", ""),
+            }
+            text = prepare_comment_for_embedding(comment, issue_dict)
+            texts.append(text)
+
+        # Generate embeddings
+        embeddings = await self.embedder.embed_batch(texts)
+
+        # Create embedding records
+        records = []
+        for comment, embedding in zip(comments, embeddings, strict=False):
+            # Compute content hash for change detection
+            content_hash = hashlib.md5(
+                comment.get("body", "").encode()
+            ).hexdigest()
+
+            record = JiraCommentEmbedding(
+                comment_id=comment["comment_id"],
+                issue_key=comment["issue_key"],
+                vector=embedding,
+                body_preview=comment.get("body_preview", ""),
+                author=comment.get("author", "Unknown"),
+                created_at=comment.get("created_at", datetime.utcnow()),
+                project_key=comment.get("project_key", ""),
+                issue_type=comment.get("issue_type", ""),
+                issue_status=comment.get("issue_status", ""),
+                content_hash=content_hash,
+                indexed_at=datetime.utcnow(),
+            )
+            records.append(record)
+
+        # Store in vector database
+        count = self.store.upsert_comments(records)
+        logger.debug(f"Stored {count} comment embeddings")
+
+        return count
+
+    def _comment_to_dict(
+        self, comment: Any, issue_dict: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Convert comment to dictionary for embedding.
+
+        Args:
+            comment: Comment object from Jira API
+            issue_dict: Parent issue information
+
+        Returns:
+            Dictionary with required fields or None if invalid
+        """
+        try:
+            # Handle different comment object formats
+            if hasattr(comment, "id"):
+                comment_id = str(comment.id)
+            elif isinstance(comment, dict):
+                comment_id = str(comment.get("id", ""))
+            else:
+                return None
+
+            if not comment_id:
+                return None
+
+            # Get body
+            if hasattr(comment, "body"):
+                body = comment.body or ""
+            elif isinstance(comment, dict):
+                body = comment.get("body", "")
+            else:
+                body = ""
+
+            # Clean and truncate body
+            clean_body = clean_jira_markup(body)
+            body_preview = truncate_at_sentence(clean_body, max_chars=300)
+
+            # Get author
+            if hasattr(comment, "author"):
+                author = getattr(comment.author, "displayName", None)
+                if not author:
+                    author = getattr(comment.author, "name", "Unknown")
+            elif isinstance(comment, dict):
+                author_data = comment.get("author", {})
+                author = author_data.get(
+                    "displayName", author_data.get("name", "Unknown")
+                )
+            else:
+                author = "Unknown"
+
+            # Get created date
+            if hasattr(comment, "created"):
+                created_at = comment.created
+            elif isinstance(comment, dict):
+                created_str = comment.get("created", "")
+                if created_str:
+                    created_at = datetime.fromisoformat(
+                        created_str.replace("Z", "+00:00")
+                    )
+                else:
+                    created_at = datetime.utcnow()
+            else:
+                created_at = datetime.utcnow()
+
+            return {
+                "comment_id": comment_id,
+                "issue_key": issue_dict["issue_id"],
+                "issue_summary": issue_dict.get("summary", ""),
+                "body": body,
+                "body_preview": body_preview,
+                "author": author,
+                "created_at": created_at,
+                "project_key": issue_dict.get("project_key", ""),
+                "issue_type": issue_dict.get("issue_type", ""),
+                "issue_status": issue_dict.get("status", ""),
+            }
+        except Exception as e:
+            logger.warning(f"Error processing comment: {e}")
+            return None
+
     def _issue_to_dict(self, issue: JiraIssue) -> dict[str, Any]:
         """Convert JiraIssue model to dictionary for embedding.
 
@@ -463,24 +697,31 @@ class VectorSyncEngine:
                 if hasattr(link, "outward_issue") and link.outward_issue:
                     linked_issues.append(link.outward_issue)
 
+        # Extract string values from nested objects
+        issue_type_name = issue.issue_type.name if issue.issue_type else "Task"
+        status_name = issue.status.name if issue.status else "Open"
+        priority_name = issue.priority.name if issue.priority else None
+        assignee_name = issue.assignee.display_name if issue.assignee else None
+        reporter_name = issue.reporter.display_name if issue.reporter else "Unknown"
+
         return {
             "issue_id": issue.key,
             "project_key": project_key,
             "summary": issue.summary or "",
             "description": description,
             "description_preview": description_preview,
-            "issue_type": issue.issue_type or "Task",
-            "status": issue.status or "Open",
+            "issue_type": issue_type_name,
+            "status": status_name,
             "status_category": status_category,
-            "priority": issue.priority,
-            "assignee": issue.assignee,
-            "reporter": issue.reporter or "Unknown",
+            "priority": priority_name,
+            "assignee": assignee_name,
+            "reporter": reporter_name,
             "labels": issue.labels or [],
             "components": list(issue.components or []),
-            "created_at": issue.created or datetime.utcnow(),
-            "updated_at": issue.updated or datetime.utcnow(),
-            "resolved_at": issue.resolution_date,
-            "parent_key": issue.parent_key,
+            "created_at": issue.created or datetime.utcnow().isoformat(),
+            "updated_at": issue.updated or datetime.utcnow().isoformat(),
+            "resolved_at": issue.resolutiondate,
+            "parent_key": issue.parent.get("key") if issue.parent else None,
             "linked_issues": linked_issues,
         }
 

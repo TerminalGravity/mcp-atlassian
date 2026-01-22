@@ -463,6 +463,175 @@ class LanceDBStore:
 
         return None
 
+    def search_comments(
+        self,
+        query_vector: list[float],
+        limit: int = 10,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search comments by vector similarity.
+
+        Args:
+            query_vector: Query embedding vector
+            limit: Maximum results to return
+            filters: Optional metadata filters
+
+        Returns:
+            List of matching comments with scores
+        """
+        search = self.comments_table.search(query_vector).limit(limit)
+
+        # Apply filters
+        if filters:
+            where_clause = self._build_where_clause(filters)
+            if where_clause:
+                search = search.where(where_clause, prefilter=True)
+
+        results = search.to_list()
+
+        # Add similarity score
+        for r in results:
+            r["score"] = 1 - r.get("_distance", 0)  # Convert distance to similarity
+
+        return results
+
+    def get_comments_for_issue(
+        self,
+        issue_key: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get all indexed comments for an issue.
+
+        Args:
+            issue_key: Jira issue key
+            limit: Maximum comments to return
+
+        Returns:
+            List of comment records
+        """
+        try:
+            results = (
+                self.comments_table.search()
+                .where(f"issue_key = '{issue_key}'", prefilter=True)
+                .limit(limit)
+                .to_list()
+            )
+            return results
+        except Exception as e:
+            logger.warning(f"Error getting comments for {issue_key}: {e}")
+            return []
+
+    def get_project_aggregations(
+        self,
+        project_key: str,
+    ) -> dict[str, Any]:
+        """Get aggregated statistics for a project.
+
+        Args:
+            project_key: Project key to analyze
+
+        Returns:
+            Dictionary with aggregated stats
+        """
+        try:
+            issues_df = self.issues_table.to_pandas()
+            project_issues = issues_df[issues_df["project_key"] == project_key]
+
+            if len(project_issues) == 0:
+                return {"project_key": project_key, "total_issues": 0}
+
+            # Basic aggregations
+            type_counts = project_issues["issue_type"].value_counts().to_dict()
+            status_counts = project_issues["status_category"].value_counts().to_dict()
+            priority_counts = (
+                project_issues["priority"].value_counts().to_dict()
+                if "priority" in project_issues.columns
+                else {}
+            )
+
+            # Assignee distribution (top 10)
+            assignee_counts = (
+                project_issues["assignee"].value_counts().head(10).to_dict()
+            )
+
+            # Label frequency
+            all_labels: list[str] = []
+            for labels in project_issues["labels"]:
+                if isinstance(labels, list):
+                    all_labels.extend(labels)
+            label_counts = {}
+            for label in all_labels:
+                label_counts[label] = label_counts.get(label, 0) + 1
+            top_labels = dict(
+                sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            )
+
+            # Component distribution
+            all_components: list[str] = []
+            for components in project_issues["components"]:
+                if isinstance(components, list):
+                    all_components.extend(components)
+            component_counts = {}
+            for comp in all_components:
+                component_counts[comp] = component_counts.get(comp, 0) + 1
+            top_components = dict(
+                sorted(component_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            )
+
+            return {
+                "project_key": project_key,
+                "total_issues": len(project_issues),
+                "by_type": type_counts,
+                "by_status_category": status_counts,
+                "by_priority": priority_counts,
+                "top_assignees": assignee_counts,
+                "top_labels": top_labels,
+                "top_components": top_components,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting aggregations for {project_key}: {e}")
+            return {"project_key": project_key, "error": str(e)}
+
+    def get_recent_issues(
+        self,
+        project_key: str | None = None,
+        days: int = 7,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get recently updated issues.
+
+        Args:
+            project_key: Optional project filter
+            days: Number of days to look back
+            limit: Maximum results
+
+        Returns:
+            List of recent issue records
+        """
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff_str = cutoff.isoformat()
+
+        try:
+            search = self.issues_table.search()
+            where_parts = [f"updated_at >= '{cutoff_str}'"]
+
+            if project_key:
+                where_parts.append(f"project_key = '{project_key}'")
+
+            search = search.where(" AND ".join(where_parts), prefilter=True)
+            results = search.limit(limit).to_list()
+
+            # Sort by updated_at descending
+            results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+            return results
+
+        except Exception as e:
+            logger.warning(f"Error getting recent issues: {e}")
+            return []
+
     def delete_issues(self, issue_ids: list[str]) -> int:
         """Delete issues by their keys.
 
