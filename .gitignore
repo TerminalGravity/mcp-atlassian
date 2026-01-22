@@ -75,3 +75,6 @@ playground/
 
 # Claude
 .claude/
+
+# Vector store data (LanceDB)
+data/
