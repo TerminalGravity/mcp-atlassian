@@ -344,7 +344,8 @@ class LanceDBStore:
         Returns:
             List of matching issues with scores
         """
-        search = self.issues_table.search(query_vector).limit(limit)
+        # Fetch extra results to handle potential duplicates
+        search = self.issues_table.search(query_vector).limit(limit * 3)
 
         # Apply filters
         if filters:
@@ -354,11 +355,19 @@ class LanceDBStore:
 
         results = search.to_list()
 
-        # Add similarity score
+        # Add similarity score and deduplicate by issue_id
+        seen_ids: set[str] = set()
+        unique_results: list[dict[str, Any]] = []
         for r in results:
-            r["score"] = 1 - r.get("_distance", 0)  # Convert distance to similarity
+            issue_id = r.get("issue_id")
+            if issue_id and issue_id not in seen_ids:
+                seen_ids.add(issue_id)
+                r["score"] = 1 - r.get("_distance", 0)  # Convert distance to similarity
+                unique_results.append(r)
+                if len(unique_results) >= limit:
+                    break
 
-        return results
+        return unique_results
 
     def hybrid_search(
         self,
@@ -807,9 +816,3 @@ class LanceDBStore:
             "db_path": str(self.config.db_path),
         }
 
-    def compact(self) -> None:
-        """Compact the database to optimize storage."""
-        logger.info("Compacting LanceDB...")
-        self.issues_table.compact_files()
-        self.comments_table.compact_files()
-        logger.info("Compaction complete")
