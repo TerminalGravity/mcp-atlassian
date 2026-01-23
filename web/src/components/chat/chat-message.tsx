@@ -1,0 +1,232 @@
+"use client"
+
+import { motion, AnimatePresence } from "framer-motion"
+import { cn } from "@/lib/utils"
+import { Avatar } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { Card } from "@/components/ui/card"
+import type { UIMessage } from "ai"
+import { Bot, User, ExternalLink, Search, Database, ChevronDown, ChevronUp } from "lucide-react"
+import { useState } from "react"
+import { IssueStats } from "./issue-stats"
+
+interface ChatMessageProps {
+  message: UIMessage
+}
+
+interface JiraIssue {
+  issue_id: string
+  summary: string
+  status: string
+  issue_type: string
+  project_key: string
+  assignee?: string | null
+  description_preview?: string | null
+  labels?: string[]
+  score: number
+}
+
+function SourceCard({ source, index }: { source: JiraIssue; index: number }) {
+  const jiraUrl = `https://alldigitalrewards.atlassian.net/browse/${source.issue_id}`
+
+  return (
+    <motion.a
+      href={jiraUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+      className="block"
+    >
+      <Card className="p-3 hover:bg-accent transition-all cursor-pointer group hover:shadow-md hover:-translate-y-0.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <Badge variant="outline" className="text-xs font-mono">
+                {source.issue_id}
+              </Badge>
+              <Badge
+                variant="secondary"
+                className={cn(
+                  "text-xs",
+                  source.status === "Done" && "bg-green-500/10 text-green-500",
+                  source.status === "Closed" && "bg-green-500/10 text-green-500",
+                  source.status === "In Progress" && "bg-yellow-500/10 text-yellow-500",
+                  source.status === "Backlog" && "bg-gray-500/10 text-gray-500",
+                  source.status === "Open" && "bg-red-500/10 text-red-500"
+                )}
+              >
+                {source.status}
+              </Badge>
+            </div>
+            <p className="text-sm font-medium truncate">{source.summary}</p>
+            {source.assignee && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Assigned to {source.assignee}
+              </p>
+            )}
+          </div>
+          <ExternalLink className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+        </div>
+      </Card>
+    </motion.a>
+  )
+}
+
+function ToolInvocation({ toolName, input, output, state, index }: {
+  toolName: string
+  input?: { query?: string; jql?: string; limit?: number }
+  output?: { issues?: JiraIssue[]; count?: number }
+  state?: string
+  index: number
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const isComplete = state === "output-available" && output !== undefined
+  const issues = output?.issues || []
+  const hasMany = issues.length > 4
+
+  // Extract query/jql from input
+  const queryText = input?.query
+  const jqlText = input?.jql
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -20 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: index * 0.1 }}
+      className="my-3 border rounded-xl overflow-hidden shadow-sm"
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={cn(
+          "w-full flex items-center gap-2 px-4 py-3 text-sm transition-colors",
+          isComplete ? "bg-muted/30 hover:bg-muted/50" : "bg-muted animate-pulse"
+        )}
+      >
+        {toolName === "semantic_search" ? (
+          <Search className="w-4 h-4 text-blue-500" />
+        ) : (
+          <Database className="w-4 h-4 text-purple-500" />
+        )}
+        <span className="font-medium">
+          {toolName === "semantic_search" ? "Semantic Search" : "JQL Search"}
+        </span>
+        <span className="text-muted-foreground truncate flex-1 text-left">
+          {toolName === "semantic_search"
+            ? queryText ? `"${queryText}"` : "searching..."
+            : jqlText || "querying..."}
+        </span>
+        {isComplete && (
+          <>
+            <Badge variant="secondary" className="text-xs">
+              {issues.length} results
+            </Badge>
+            {hasMany && (
+              expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />
+            )}
+          </>
+        )}
+      </button>
+
+      <AnimatePresence>
+        {isComplete && expanded && issues.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="border-t bg-background"
+          >
+            {/* Stats visualization */}
+            {issues.length >= 3 && (
+              <div className="px-4 pt-4">
+                <IssueStats issues={issues} />
+              </div>
+            )}
+
+            {/* Issue cards */}
+            <div className="px-4 py-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                {issues.slice(0, expanded ? 6 : 4).map((issue, i) => (
+                  <SourceCard key={issue.issue_id} source={issue} index={i} />
+                ))}
+              </div>
+              {issues.length > 6 && (
+                <p className="text-xs text-muted-foreground mt-3 text-center">
+                  +{issues.length - 6} more results
+                </p>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  )
+}
+
+export function ChatMessage({ message }: ChatMessageProps) {
+  const isUser = message.role === "user"
+  const parts = message.parts || []
+
+  // Extract tool invocations (type starts with "tool-") and text parts
+  const toolParts = parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
+    ...p,
+    toolName: p.type.replace('tool-', ''),
+  }))
+  const textParts = parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+  const textContent = textParts.map(p => p.text).join('')
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={cn("flex gap-3 py-4", isUser && "flex-row-reverse")}
+    >
+      <Avatar className={cn(
+        "h-8 w-8 flex-shrink-0",
+        isUser ? "bg-primary" : "bg-muted"
+      )}>
+        <div className="flex items-center justify-center w-full h-full">
+          {isUser ? (
+            <User className="h-4 w-4 text-primary-foreground" />
+          ) : (
+            <Bot className="h-4 w-4 text-muted-foreground" />
+          )}
+        </div>
+      </Avatar>
+
+      <div className={cn("flex-1 space-y-3 min-w-0", isUser && "text-right")}>
+        {/* Tool invocations (intermediate steps) */}
+        {toolParts.length > 0 && (
+          <div className="space-y-2">
+            {toolParts.map((tool, index) => (
+              <ToolInvocation
+                key={`${tool.toolName}-${index}`}
+                toolName={tool.toolName}
+                input={(tool as unknown as { input?: { query?: string; jql?: string; limit?: number } }).input}
+                output={(tool as unknown as { output?: { issues?: JiraIssue[]; count?: number } }).output}
+                state={(tool as unknown as { state?: string }).state}
+                index={index}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Message content */}
+        {textContent && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className={cn(
+              "prose prose-sm dark:prose-invert max-w-none",
+              isUser && "text-right"
+            )}
+          >
+            <p className="whitespace-pre-wrap leading-relaxed">{textContent}</p>
+          </motion.div>
+        )}
+      </div>
+    </motion.div>
+  )
+}

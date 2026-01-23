@@ -1179,3 +1179,512 @@ async def jira_project_velocity(
             "error": str(e),
             "project": project,
         }, indent=2)
+
+
+# =============================================================================
+# AI-Powered Tools (LLM-based synthesis)
+# =============================================================================
+
+# OpenAI client singleton for AI tools
+_openai_client: Any = None
+
+
+def _get_openai_client() -> Any:
+    """Get or create OpenAI client singleton."""
+    global _openai_client
+    if _openai_client is None:
+        from openai import AsyncOpenAI
+        _openai_client = AsyncOpenAI()
+    return _openai_client
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "ai", "read"},
+    annotations={"title": "AI Summary", "readOnlyHint": True},
+)
+async def jira_ai_summary(
+    ctx: Context,
+    issue_keys: Annotated[
+        str,
+        Field(
+            description=(
+                "Jira issue key(s) to summarize. Single key (e.g., 'PROJ-123') "
+                "or comma-separated list (e.g., 'PROJ-123,PROJ-124,PROJ-125')"
+            )
+        ),
+    ],
+    summary_type: Annotated[
+        str,
+        Field(
+            description=(
+                "Type of summary: 'brief' (2-3 sentences), 'detailed' (full analysis), "
+                "'technical' (implementation focus), 'executive' (business impact)"
+            ),
+            default="brief",
+        ),
+    ] = "brief",
+    include_comments: Annotated[
+        bool,
+        Field(
+            description="Include comment analysis in the summary",
+            default=False,
+        ),
+    ] = False,
+) -> str:
+    """
+    Generate AI-powered summaries for one or more Jira issues.
+
+    Uses an LLM to analyze issue content and generate human-readable summaries.
+    Useful for:
+    - Quickly understanding complex issues
+    - Creating executive briefings
+    - Extracting key technical details
+    - Summarizing comment threads and discussions
+
+    Args:
+        ctx: The FastMCP context.
+        issue_keys: Single key or comma-separated list of issue keys.
+        summary_type: Type of summary to generate.
+        include_comments: Whether to include comments in analysis.
+
+    Returns:
+        JSON string with AI-generated summaries for each issue.
+    """
+    from mcp_atlassian.servers.dependencies import get_jira_fetcher
+
+    try:
+        # Parse issue keys
+        keys = [k.strip() for k in issue_keys.split(",") if k.strip()]
+        if not keys:
+            return json.dumps({
+                "error": "No valid issue keys provided",
+                "hint": "Provide one or more issue keys, e.g., 'PROJ-123' or 'PROJ-123,PROJ-124'",
+            }, indent=2)
+
+        # Validate summary type
+        valid_types = ["brief", "detailed", "technical", "executive"]
+        if summary_type not in valid_types:
+            return json.dumps({
+                "error": f"Invalid summary_type '{summary_type}'",
+                "valid_types": valid_types,
+            }, indent=2)
+
+        # Get Jira client and OpenAI client
+        jira = await get_jira_fetcher(ctx)
+        client = _get_openai_client()
+        config = _get_config()
+
+        # Fetch issues
+        summaries = []
+        for key in keys:
+            try:
+                # Fetch issue with full details
+                issue = jira.get_issue(
+                    issue_key=key,
+                    fields="summary,description,status,priority,assignee,reporter,labels,components,created,updated,issuetype",
+                    comment_limit=10 if include_comments else 0,
+                )
+
+                # Build context for LLM
+                issue_context = _build_issue_context(issue, include_comments)
+
+                # Generate summary
+                ai_summary = await _generate_summary(
+                    client=client,
+                    issue_context=issue_context,
+                    summary_type=summary_type,
+                    model=config.self_query_model,
+                )
+
+                summaries.append({
+                    "key": key,
+                    "title": issue.summary[:100] if issue.summary else "",
+                    "status": issue.status.name if issue.status else "Unknown",
+                    "type": issue.issue_type.name if issue.issue_type else "Unknown",
+                    "ai_summary": ai_summary,
+                    "summary_type": summary_type,
+                })
+
+            except Exception as e:
+                logger.error(f"Failed to summarize {key}: {e}")
+                summaries.append({
+                    "key": key,
+                    "error": str(e),
+                })
+
+        response = {
+            "total_requested": len(keys),
+            "successful": len([s for s in summaries if "ai_summary" in s]),
+            "failed": len([s for s in summaries if "error" in s]),
+            "summaries": summaries,
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"AI summary error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "issue_keys": issue_keys,
+        }, indent=2)
+
+
+def _build_issue_context(issue: Any, include_comments: bool) -> str:
+    """Build context string from issue for LLM consumption."""
+    parts = [
+        f"Issue: {issue.key}",
+        f"Type: {issue.issue_type.name if issue.issue_type else 'Unknown'}",
+        f"Status: {issue.status.name if issue.status else 'Unknown'}",
+        f"Priority: {issue.priority.name if issue.priority else 'Not set'}",
+        f"Summary: {issue.summary}",
+    ]
+
+    if issue.assignee:
+        assignee_name = issue.assignee.display_name if hasattr(issue.assignee, 'display_name') else str(issue.assignee)
+        parts.append(f"Assignee: {assignee_name}")
+
+    if issue.reporter:
+        reporter_name = issue.reporter.display_name if hasattr(issue.reporter, 'display_name') else str(issue.reporter)
+        parts.append(f"Reporter: {reporter_name}")
+
+    if issue.labels:
+        parts.append(f"Labels: {', '.join(issue.labels)}")
+
+    if issue.components:
+        parts.append(f"Components: {', '.join(issue.components)}")
+
+    if issue.description:
+        # Truncate long descriptions
+        desc = issue.description[:2000] if len(issue.description) > 2000 else issue.description
+        parts.append(f"\nDescription:\n{desc}")
+
+    if include_comments and issue.comments:
+        parts.append(f"\nComments ({len(issue.comments)}):")
+        for i, comment in enumerate(issue.comments[:5]):  # Limit to 5 comments
+            author = "Unknown"
+            if hasattr(comment, 'author') and comment.author:
+                author = comment.author.display_name if hasattr(comment.author, 'display_name') else str(comment.author)
+            body = comment.body[:300] if hasattr(comment, 'body') and comment.body else ""
+            parts.append(f"  [{i+1}] {author}: {body}")
+
+    return "\n".join(parts)
+
+
+async def _generate_summary(
+    client: Any,
+    issue_context: str,
+    summary_type: str,
+    model: str,
+) -> str:
+    """Generate AI summary using OpenAI."""
+    system_prompts = {
+        "brief": (
+            "You are a technical assistant that creates concise summaries of Jira issues. "
+            "Provide a 2-3 sentence summary that captures the essence of the issue. "
+            "Focus on: what the issue is about, its current state, and any key details."
+        ),
+        "detailed": (
+            "You are a technical assistant that creates detailed summaries of Jira issues. "
+            "Provide a comprehensive analysis including:\n"
+            "- Problem/feature description\n"
+            "- Current status and progress\n"
+            "- Key stakeholders involved\n"
+            "- Any blockers or dependencies mentioned\n"
+            "- Proposed solutions or next steps (if any)"
+        ),
+        "technical": (
+            "You are a senior software engineer reviewing a Jira issue. "
+            "Focus on technical details:\n"
+            "- What technical problem or feature is being addressed\n"
+            "- Implementation considerations\n"
+            "- Potential technical risks or challenges\n"
+            "- Dependencies on other systems or components\n"
+            "Be specific and technical in your analysis."
+        ),
+        "executive": (
+            "You are creating an executive summary of a Jira issue for leadership. "
+            "Focus on business impact:\n"
+            "- What is the business value or risk\n"
+            "- Who is affected (customers, teams)\n"
+            "- Current status in simple terms\n"
+            "- Any decisions or escalations needed\n"
+            "Keep it concise and jargon-free."
+        ),
+    }
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompts.get(summary_type, system_prompts["brief"])},
+                {"role": "user", "content": f"Please summarize the following Jira issue:\n\n{issue_context}"},
+            ],
+            temperature=0.3,
+            max_tokens=500 if summary_type == "brief" else 1000,
+        )
+
+        return response.choices[0].message.content or "(No summary generated)"
+
+    except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
+        msg = f"Failed to generate summary: {e!s}"
+        raise ValueError(msg) from e
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "ai", "read"},
+    annotations={"title": "AI Query", "readOnlyHint": True},
+)
+async def jira_ai_query(
+    ctx: Context,
+    question: Annotated[
+        str,
+        Field(
+            description=(
+                "Natural language question about your Jira issues. Examples:\n"
+                "- 'What tickets relate to authentication problems?'\n"
+                "- 'What do we know about the payment processing issues?'\n"
+                "- 'Summarize recent bugs in the API'\n"
+                "- 'What work has been done on performance optimization?'"
+            )
+        ),
+    ],
+    project: Annotated[
+        str | None,
+        Field(
+            description="Optional project key to focus the search (e.g., 'PROJ')",
+            default=None,
+        ),
+    ] = None,
+    max_issues: Annotated[
+        int,
+        Field(
+            description="Maximum issues to analyze for the answer (3-15)",
+            ge=3,
+            le=15,
+            default=7,
+        ),
+    ] = 7,
+    include_comments: Annotated[
+        bool,
+        Field(
+            description="Search and include comments in the analysis",
+            default=True,
+        ),
+    ] = True,
+) -> str:
+    """
+    Ask natural language questions about your Jira issues and get synthesized answers.
+
+    This tool searches for relevant issues using semantic search, then uses an LLM
+    to synthesize a comprehensive answer based on the found issues.
+
+    Unlike simple search tools that return lists, this tool:
+    - Understands your question's intent
+    - Finds semantically relevant issues
+    - Reads and analyzes their content
+    - Synthesizes a coherent answer with citations
+
+    Useful for:
+    - "What do we know about X?" questions
+    - Understanding the state of a feature/bug area
+    - Getting context on historical decisions
+    - Summarizing work across multiple tickets
+
+    Args:
+        ctx: The FastMCP context.
+        question: Natural language question to answer.
+        project: Optional project filter.
+        max_issues: Maximum issues to include in analysis.
+        include_comments: Whether to also search comments.
+
+    Returns:
+        JSON with synthesized answer and source citations.
+    """
+    from mcp_atlassian.servers.dependencies import get_jira_fetcher
+
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+        client = _get_openai_client()
+        config = _get_config()
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "Vector index is empty. Run sync first.",
+                "hint": "Use CLI: mcp-atlassian vector sync --full",
+            }, indent=2)
+
+        # Generate query embedding
+        query_vector = await embedder.embed(question)
+
+        # Build filters
+        filters: dict[str, Any] = {}
+        if project:
+            filters["project_key"] = project
+
+        # Search for relevant issues
+        issue_results = store.hybrid_search(
+            query_vector=query_vector,
+            query_text=question,
+            limit=max_issues,
+            filters=filters if filters else None,
+            fts_weight=config.fts_weight,
+        )
+
+        # Also search comments if enabled
+        comment_results = []
+        if include_comments and stats["total_comments"] > 0:
+            comment_results = store.search_comments(
+                query_vector=query_vector,
+                limit=5,
+                filters=filters if filters else None,
+            )
+
+        if not issue_results and not comment_results:
+            return json.dumps({
+                "question": question,
+                "answer": "I couldn't find any relevant issues matching your question.",
+                "sources": [],
+                "hint": "Try rephrasing your question or broadening your search",
+            }, indent=2)
+
+        # Fetch full issue details for context
+        jira = await get_jira_fetcher(ctx)
+        issue_contexts = []
+
+        for result in issue_results:
+            try:
+                issue = jira.get_issue(
+                    issue_key=result["issue_id"],
+                    fields="summary,description,status,priority,labels,issuetype",
+                    comment_limit=3 if include_comments else 0,
+                )
+                context = _build_issue_context(issue, include_comments=False)
+                issue_contexts.append({
+                    "key": result["issue_id"],
+                    "summary": result["summary"][:100],
+                    "context": context,
+                    "score": result.get("score", 0),
+                })
+            except Exception as e:
+                logger.warning(f"Failed to fetch issue {result['issue_id']}: {e}")
+                # Use indexed data as fallback
+                issue_contexts.append({
+                    "key": result["issue_id"],
+                    "summary": result["summary"][:100],
+                    "context": f"Issue: {result['issue_id']}\nSummary: {result['summary']}\nType: {result.get('issue_type', 'Unknown')}\nStatus: {result.get('status', 'Unknown')}",
+                    "score": result.get("score", 0),
+                })
+
+        # Add comment context
+        comment_contexts = []
+        for result in comment_results[:3]:  # Limit to top 3 comments
+            comment_contexts.append({
+                "issue_key": result["issue_key"],
+                "author": result.get("author", "Unknown"),
+                "preview": result["body_preview"][:200],
+            })
+
+        # Generate synthesized answer
+        answer = await _generate_answer(
+            client=client,
+            question=question,
+            issue_contexts=issue_contexts,
+            comment_contexts=comment_contexts,
+            model=config.self_query_model,
+        )
+
+        # Build response with sources
+        response = {
+            "question": question,
+            "answer": answer,
+            "sources": {
+                "issues": [
+                    {
+                        "key": ic["key"],
+                        "summary": ic["summary"],
+                        "relevance": round(ic["score"], 3),
+                    }
+                    for ic in issue_contexts
+                ],
+                "comments": [
+                    {
+                        "issue": cc["issue_key"],
+                        "author": cc["author"],
+                        "preview": cc["preview"][:80] + "...",
+                    }
+                    for cc in comment_contexts
+                ] if comment_contexts else [],
+            },
+            "metadata": {
+                "issues_analyzed": len(issue_contexts),
+                "comments_analyzed": len(comment_contexts),
+                "project_filter": project,
+            },
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"AI query error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "question": question,
+        }, indent=2)
+
+
+async def _generate_answer(
+    client: Any,
+    question: str,
+    issue_contexts: list[dict[str, Any]],
+    comment_contexts: list[dict[str, Any]],
+    model: str,
+) -> str:
+    """Generate synthesized answer from issue contexts."""
+    # Build context for LLM
+    context_parts = ["# Relevant Jira Issues\n"]
+
+    for ic in issue_contexts:
+        context_parts.append(f"## {ic['key']} (relevance: {ic['score']:.2f})")
+        context_parts.append(ic["context"])
+        context_parts.append("")
+
+    if comment_contexts:
+        context_parts.append("\n# Relevant Comments\n")
+        for cc in comment_contexts:
+            context_parts.append(f"- [{cc['issue_key']}] {cc['author']}: {cc['preview']}")
+
+    full_context = "\n".join(context_parts)
+
+    system_prompt = """You are a helpful assistant that answers questions about Jira issues.
+
+Based on the provided issue contexts, synthesize a comprehensive answer to the user's question.
+
+Guidelines:
+- Answer the question directly and concisely
+- Reference specific issue keys when citing information (e.g., "According to PROJ-123...")
+- If information is uncertain or incomplete, say so
+- Highlight key patterns or themes across multiple issues
+- Keep the answer focused and actionable
+- If the issues don't fully answer the question, acknowledge what's missing"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Question: {question}\n\n{full_context}"},
+            ],
+            temperature=0.3,
+            max_tokens=1500,
+        )
+
+        return response.choices[0].message.content or "(No answer generated)"
+
+    except Exception as e:
+        logger.error(f"OpenAI API error generating answer: {e}")
+        msg = f"Failed to generate answer: {e!s}"
+        raise ValueError(msg) from e

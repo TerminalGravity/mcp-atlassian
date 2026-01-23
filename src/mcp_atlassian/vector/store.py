@@ -790,24 +790,28 @@ class LanceDBStore:
             Dictionary with stats about indexed issues and comments
         """
         try:
-            issue_count = len(self.issues_table.to_pandas())
+            issue_count = self.issues_table.count_rows()
         except Exception:
             issue_count = 0
 
         try:
-            comment_count = len(self.comments_table.to_pandas())
+            comment_count = self.comments_table.count_rows()
         except Exception:
             comment_count = 0
 
-        # Get unique projects
+        # Get unique projects using a query instead of loading all data
+        projects: list[str] = []
         try:
-            issues_df = self.issues_table.to_pandas()
-            if len(issues_df) > 0:
-                projects = issues_df["project_key"].unique().tolist()
-            else:
-                projects = []
+            # Sample to get unique project keys without loading entire table
+            results = (
+                self.issues_table.search()
+                .select(["project_key"])
+                .limit(10000)
+                .to_list()
+            )
+            projects = list({r["project_key"] for r in results if r.get("project_key")})
         except Exception:
-            projects = []
+            pass
 
         return {
             "total_issues": issue_count,
