@@ -283,6 +283,12 @@ class VectorSyncEngine:
         """
         result = SyncResult()
 
+        # For full syncs, clear existing data for this project first
+        if not incremental:
+            cleared = self.store.clear_issues(project_key=project_key)
+            if cleared > 0:
+                logger.info(f"Cleared {cleared} existing issues for {project_key}")
+
         # Build JQL
         if incremental and state.last_issue_updated > datetime.min:
             updated_str = state.last_issue_updated.strftime("%Y-%m-%d %H:%M")
@@ -296,9 +302,11 @@ class VectorSyncEngine:
 
         logger.info(f"Syncing project {project_key} with JQL: {jql}")
 
-        # Fetch issues in batches
+        # Fetch issues in batches - use larger batches for full syncs
         offset = 0
-        batch_size = 100
+        fetch_batch_size = 100  # Jira API limit
+        # Accumulate more issues before embedding for efficiency
+        embed_batch_size = 500 if not incremental else self.config.batch_size
         issues_to_embed: list[dict[str, Any]] = []
         max_updated = state.last_issue_updated
 
@@ -308,7 +316,7 @@ class VectorSyncEngine:
                     jql=jql,
                     fields="*all",
                     start=offset,
-                    limit=batch_size,
+                    limit=fetch_batch_size,
                 )
 
                 if not search_result.issues:
@@ -353,15 +361,21 @@ class VectorSyncEngine:
                         max_updated = updated_at_dt
 
                 # Embed and store in batches
-                if len(issues_to_embed) >= self.config.batch_size:
-                    embedded_count = await self._embed_and_store(issues_to_embed)
+                if len(issues_to_embed) >= embed_batch_size:
+                    embedded_count = await self._embed_and_store(
+                        issues_to_embed, bulk_insert=not incremental
+                    )
                     result.issues_embedded += embedded_count
+                    logger.info(
+                        f"Progress: {result.issues_embedded} issues embedded "
+                        f"({result.issues_processed} processed)"
+                    )
                     issues_to_embed = []
 
-                offset += batch_size
+                offset += fetch_batch_size
 
                 # Check if we got fewer results than requested (last page)
-                if len(search_result.issues) < batch_size:
+                if len(search_result.issues) < fetch_batch_size:
                     break
 
             except Exception as e:
@@ -372,8 +386,15 @@ class VectorSyncEngine:
 
         # Process remaining issues
         if issues_to_embed:
-            embedded_count = await self._embed_and_store(issues_to_embed)
+            embedded_count = await self._embed_and_store(
+                issues_to_embed, bulk_insert=not incremental
+            )
             result.issues_embedded += embedded_count
+
+        # Compact the table after full sync to reduce storage
+        if not incremental and result.issues_embedded > 0:
+            logger.info("Compacting database after full sync...")
+            self.store.compact()
 
         # Update state with max updated time
         if max_updated > state.last_issue_updated:
@@ -405,11 +426,13 @@ class VectorSyncEngine:
     async def _embed_and_store(
         self,
         issues: list[dict[str, Any]],
+        bulk_insert: bool = False,
     ) -> int:
         """Embed issues and store in vector database.
 
         Args:
             issues: List of issue dictionaries to embed
+            bulk_insert: If True, use bulk insert (faster for full syncs)
 
         Returns:
             Number of issues successfully embedded
@@ -452,7 +475,10 @@ class VectorSyncEngine:
             records.append(record)
 
         # Store in vector database
-        count = self.store.upsert_issues(records)
+        if bulk_insert:
+            count = self.store.bulk_insert_issues(records)
+        else:
+            count = self.store.upsert_issues(records)
         logger.debug(f"Stored {count} issue embeddings")
 
         return count
@@ -589,6 +615,9 @@ class VectorSyncEngine:
         """
         try:
             # Handle different comment object formats
+            # Skip if comment is a string (sometimes raw text is passed)
+            if isinstance(comment, str):
+                return None
             if hasattr(comment, "id"):
                 comment_id = str(comment.id)
             elif isinstance(comment, dict):

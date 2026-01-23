@@ -17,6 +17,25 @@ logger = logging.getLogger(__name__)
 
 # Table names
 ISSUES_TABLE = "jira_issues"
+
+
+def _format_sql_in_clause(values: list[str]) -> str:
+    """Format a list of values for SQL IN clause.
+
+    Handles the edge case where a single-element tuple in Python
+    produces ('value',) which is invalid SQL syntax.
+
+    Args:
+        values: List of string values to format
+
+    Returns:
+        Properly formatted SQL IN clause like ('a', 'b') or ('a')
+    """
+    if not values:
+        return "()"
+    # Quote and escape values, then join with commas
+    escaped = [f"'{v.replace(chr(39), chr(39)+chr(39))}'" for v in values]
+    return f"({', '.join(escaped)})"
 COMMENTS_TABLE = "jira_comments"
 
 
@@ -87,6 +106,26 @@ class LanceDBStore:
         # Create empty table with schema
         return self.db.create_table(name, schema=schema)
 
+    def bulk_insert_issues(self, issues: list[JiraIssueEmbedding]) -> int:
+        """Bulk insert issues without checking for existing records.
+
+        Use this for initial full syncs where the table is empty or
+        has been cleared. Much faster than upsert.
+
+        Args:
+            issues: List of issue embeddings to insert
+
+        Returns:
+            Number of issues inserted
+        """
+        if not issues:
+            return 0
+
+        records = [issue.model_dump() for issue in issues]
+        self.issues_table.add(records)
+        logger.info(f"Bulk inserted {len(records)} issues")
+        return len(records)
+
     def upsert_issues(self, issues: list[JiraIssueEmbedding]) -> int:
         """Upsert multiple issues into the store.
 
@@ -112,7 +151,7 @@ class LanceDBStore:
         # Delete existing records that will be updated
         if updates:
             update_ids = [r["issue_id"] for r in updates]
-            self.issues_table.delete(f"issue_id IN {tuple(update_ids)}")
+            self.issues_table.delete(f"issue_id IN {_format_sql_in_clause(update_ids)}")
             logger.debug(f"Deleted {len(updates)} existing issues for update")
 
         # Add all records
@@ -125,6 +164,71 @@ class LanceDBStore:
             )
 
         return len(all_records)
+
+    def compact(self) -> None:
+        """Compact tables to reduce storage and improve performance.
+
+        Call this after large batch operations to merge fragments.
+        Requires pylance package for optimal performance.
+        """
+        try:
+            # compact_files requires pylance - skip if not available
+            if hasattr(self.issues_table, 'compact_files'):
+                self.issues_table.compact_files()
+                logger.info("Compacted issues table")
+            else:
+                logger.debug("Table compaction not available")
+        except ImportError:
+            logger.debug("pylance not installed, skipping compaction")
+        except Exception as e:
+            logger.debug(f"Skipping compaction: {e}")
+
+        try:
+            if hasattr(self.comments_table, 'compact_files'):
+                self.comments_table.compact_files()
+                logger.info("Compacted comments table")
+        except ImportError:
+            pass  # pylance not installed
+        except Exception as e:
+            logger.debug(f"Skipping comments compaction: {e}")
+
+    def clear_issues(self, project_key: str | None = None) -> int:
+        """Clear all issues, optionally filtered by project.
+
+        Args:
+            project_key: Optional project key to clear only that project
+
+        Returns:
+            Number of issues deleted (estimated)
+        """
+        try:
+            if project_key:
+                # Delete issues for specific project
+                # Try to get count, but don't fail if unavailable
+                try:
+                    count = self.issues_table.count_rows()
+                except Exception:
+                    count = 0
+                self.issues_table.delete(f"project_key = '{project_key}'")
+                try:
+                    new_count = self.issues_table.count_rows()
+                    deleted = count - new_count
+                except Exception:
+                    deleted = count  # Assume all deleted
+            else:
+                # Delete all issues
+                try:
+                    count = self.issues_table.count_rows()
+                except Exception:
+                    count = 0
+                self.issues_table.delete("true")
+                deleted = count
+
+            logger.info(f"Cleared {deleted} issues")
+            return deleted
+        except Exception as e:
+            logger.warning(f"Failed to clear issues: {e}")
+            return 0
 
     def upsert_comments(self, comments: list[JiraCommentEmbedding]) -> int:
         """Upsert multiple comments into the store.
@@ -152,7 +256,7 @@ class LanceDBStore:
         # Delete existing records that will be updated
         if updates:
             update_ids = [r["comment_id"] for r in updates]
-            self.comments_table.delete(f"comment_id IN {tuple(update_ids)}")
+            self.comments_table.delete(f"comment_id IN {_format_sql_in_clause(update_ids)}")
 
         # Add all records
         all_records = updates + inserts
@@ -174,7 +278,7 @@ class LanceDBStore:
             # Query for existing IDs
             result = (
                 self.issues_table.search()
-                .where(f"issue_id IN {tuple(issue_ids)}", prefilter=True)
+                .where(f"issue_id IN {_format_sql_in_clause(issue_ids)}", prefilter=True)
                 .select(["issue_id"])
                 .limit(len(issue_ids))
                 .to_list()
@@ -192,7 +296,7 @@ class LanceDBStore:
         try:
             result = (
                 self.comments_table.search()
-                .where(f"comment_id IN {tuple(comment_ids)}", prefilter=True)
+                .where(f"comment_id IN {_format_sql_in_clause(comment_ids)}", prefilter=True)
                 .select(["comment_id"])
                 .limit(len(comment_ids))
                 .to_list()
@@ -644,7 +748,7 @@ class LanceDBStore:
         if not issue_ids:
             return 0
 
-        self.issues_table.delete(f"issue_id IN {tuple(issue_ids)}")
+        self.issues_table.delete(f"issue_id IN {_format_sql_in_clause(issue_ids)}")
         logger.info(f"Deleted {len(issue_ids)} issues")
         return len(issue_ids)
 
