@@ -882,18 +882,27 @@ async def create_issue(
         dict[str, Any] | str | None,
         Field(
             description=(
-                "(Optional) Dictionary of additional fields to set. Examples:\n"
-                "- Set priority: {'priority': {'name': 'High'}}\n"
-                "- Add labels: {'labels': ['frontend', 'urgent']}\n"
-                "- Link to parent (for any issue type): {'parent': 'PROJ-123'}\n"
-                "- Set Fix Version/s: {'fixVersions': [{'id': '10020'}]}\n"
-                "- Custom fields: {'customfield_10010': 'value'}"
+                "REQUIRED for fields not listed above (labels, priority, duedate, etc).\n"
+                "Pass as a dictionary. Field names must match Jira API exactly:\n\n"
+                "COMMON FIELDS:\n"
+                "- Due date: {'duedate': '2025-02-15'}  (use 'duedate' NOT 'due_date')\n"
+                "- Labels: {'labels': ['frontend', 'urgent']}\n"
+                "- Priority: {'priority': {'name': 'High'}}\n"
+                "- Parent: {'parent': {'key': 'PROJ-123'}}\n"
+                "- Fix versions: {'fixVersions': [{'name': 'v1.0'}]}\n"
+                "- Custom fields: {'customfield_10010': 'value'}\n\n"
+                "IMPORTANT: Do NOT pass labels, duedate, priority as top-level parameters.\n"
+                "They MUST be inside this additional_fields dict."
             ),
             default=None,
         ),
     ] = None,
 ) -> str:
-    """Create a new Jira issue with optional Epic link or parent for subtasks.
+    """Create a new Jira issue.
+
+    PARAMETER GUIDE:
+    - Top-level: project_key, summary, issue_type, assignee, description, components
+    - Everything else (labels, duedate, priority, parent, custom fields) goes in additional_fields
 
     Args:
         ctx: The FastMCP context.
