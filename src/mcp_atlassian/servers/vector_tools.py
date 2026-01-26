@@ -26,6 +26,28 @@ _config: VectorConfig | None = None
 _self_query_parser: SelfQueryParser | None = None
 
 
+def _reset_singletons() -> None:
+    """Reset all singletons to force reconnection to fresh data.
+
+    Call this after a sync operation to ensure the MCP server
+    connects to the updated LanceDB tables.
+    """
+    global _vector_store, _embedder, _config, _self_query_parser, _insights_engine, _openai_client
+    _vector_store = None
+    _embedder = None
+    _config = None
+    _self_query_parser = None
+    # Also reset insights engine if it exists
+    try:
+        _insights_engine = None
+    except NameError:
+        pass
+    try:
+        _openai_client = None
+    except NameError:
+        pass
+
+
 def _get_config() -> VectorConfig:
     """Get or create vector config singleton."""
     global _config
@@ -498,6 +520,54 @@ async def jira_detect_duplicates(
         return json.dumps({
             "error": str(e),
             "verdict": "ERROR",
+        }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "admin"},
+    annotations={"title": "Reload Vector Index", "readOnlyHint": False},
+)
+async def jira_vector_reload(
+    ctx: Context,
+) -> str:
+    """
+    Reload the vector index connection after a sync operation.
+
+    Call this after running a vector sync to refresh the MCP server's
+    connection to the updated LanceDB tables. This avoids needing to
+    restart the MCP server after syncing new data.
+
+    Args:
+        ctx: The FastMCP context.
+
+    Returns:
+        JSON string confirming reload and showing new stats.
+    """
+    try:
+        # Reset all singletons to force reconnection
+        _reset_singletons()
+
+        # Reconnect and get fresh stats
+        store = _get_store()
+        stats = store.get_stats()
+
+        response = {
+            "status": "reloaded",
+            "message": "Vector index connection refreshed successfully",
+            "index_stats": {
+                "total_issues": stats["total_issues"],
+                "total_comments": stats["total_comments"],
+                "projects": stats["projects"],
+            },
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"Vector reload error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "status": "failed",
         }, indent=2)
 
 

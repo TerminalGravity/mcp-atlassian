@@ -371,36 +371,62 @@ class VectorSyncEngine:
                 f"ORDER BY updated ASC"
             )
         else:
-            # Only sync issues updated since 2022, most recent first
-            jql = f'project = "{project_key}" AND updated >= "2022-01-01" ORDER BY updated DESC'
+            # Only sync issues updated since 2022. Use ORDER BY key for stable
+            # pagination (updated DESC causes duplicates as issues change)
+            jql = (
+                f'project = "{project_key}" '
+                f'AND updated >= "2022-01-01" ORDER BY key DESC'
+            )
 
         logger.info(f"Syncing project {project_key} with JQL: {jql}")
 
-        # Fetch issues in batches - use larger batches for full syncs
-        offset = 0
-        fetch_batch_size = 100  # Jira API limit
-        # Accumulate issues before embedding - balance between efficiency and progress feedback
+        # For Jira Cloud, pagination via 'start' offset doesn't work - the API
+        # uses token-based pagination internally. Process in batches for embedding.
         embed_batch_size = 100 if not incremental else self.config.batch_size
-        issues_to_embed: dict[str, dict[str, Any]] = {}  # Use dict to dedupe by issue_id
+        issues_to_embed: dict[str, dict[str, Any]] = {}  # Dedupe by issue_id
+        synced_ids: set[str] = set()  # Track IDs to prevent cross-batch dupes
         max_updated = state.last_issue_updated
+        last_key: str | None = None  # For key-based pagination
 
         while True:
             try:
+                # Use key-based pagination: fetch issues with key < last_key
+                # Insert the key filter before ORDER BY clause
+                if last_key:
+                    if "ORDER BY" in jql.upper():
+                        parts = jql.upper().split("ORDER BY")
+                        base_jql = jql[: len(parts[0])]
+                        order_part = jql[len(parts[0]) :]
+                        current_jql = f"{base_jql} AND key < '{last_key}' {order_part}"
+                    else:
+                        current_jql = f"{jql} AND key < '{last_key}'"
+                else:
+                    current_jql = jql
+
                 search_result = self.jira.search_issues(
-                    jql=jql,
+                    jql=current_jql,
                     fields="*all",
-                    start=offset,
-                    limit=fetch_batch_size,
+                    start=0,  # Always start from 0, use key filter for pagination
+                    limit=1000,  # Fetch more per call, internal pagination handles it
                 )
 
                 if not search_result.issues:
                     break
+
+                # Track the last key for next iteration
+                last_key = search_result.issues[-1].key
 
                 for issue in search_result.issues:
                     result.issues_processed += 1
 
                     # Convert to dict for processing
                     issue_dict = self._issue_to_dict(issue)
+                    issue_id = issue_dict["issue_id"]
+
+                    # Skip if already synced this run (prevents cross-batch duplicates)
+                    if issue_id in synced_ids:
+                        result.issues_skipped += 1
+                        continue
 
                     # Check if content changed (skip if hash matches)
                     content_hash = compute_content_hash(
@@ -411,7 +437,7 @@ class VectorSyncEngine:
                     )
 
                     if incremental:
-                        existing = self.store.get_issue_by_key(issue_dict["issue_id"])
+                        existing = self.store.get_issue_by_key(issue_id)
                         if existing and existing.content_hash == content_hash:
                             result.issues_skipped += 1
                             continue
@@ -440,20 +466,20 @@ class VectorSyncEngine:
                         list(issues_to_embed.values()), bulk_insert=not incremental
                     )
                     result.issues_embedded += embedded_count
+                    # Track synced IDs to prevent duplicates in future batches
+                    synced_ids.update(issues_to_embed.keys())
                     logger.info(
-                        f"Progress: {result.issues_embedded} issues embedded "
-                        f"({result.issues_processed} processed)"
+                        f"Progress: {result.issues_embedded} embedded, "
+                        f"{result.issues_processed} processed, {len(synced_ids)} unique"
                     )
                     issues_to_embed = {}
 
-                offset += fetch_batch_size
-
                 # Check if we got fewer results than requested (last page)
-                if len(search_result.issues) < fetch_batch_size:
+                if len(search_result.issues) < 1000:
                     break
 
             except Exception as e:
-                error_msg = f"Error fetching issues at offset {offset}: {e}"
+                error_msg = f"Error fetching issues (last_key={last_key}): {e}"
                 logger.error(error_msg)
                 result.errors.append(error_msg)
                 break
@@ -464,6 +490,7 @@ class VectorSyncEngine:
                 list(issues_to_embed.values()), bulk_insert=not incremental
             )
             result.issues_embedded += embedded_count
+            synced_ids.update(issues_to_embed.keys())
 
         # Compact the table after full sync to reduce storage
         if not incremental and result.issues_embedded > 0:

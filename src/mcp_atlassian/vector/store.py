@@ -107,10 +107,10 @@ class LanceDBStore:
         return self.db.create_table(name, schema=schema)
 
     def bulk_insert_issues(self, issues: list[JiraIssueEmbedding]) -> int:
-        """Bulk insert issues, replacing any existing records with same ID.
+        """Bulk insert issues for full sync (table should be cleared first).
 
-        Performs delete-then-insert to avoid duplicates while maintaining
-        bulk performance for full syncs.
+        For full syncs where the table is cleared at the start, this just
+        deduplicates within the batch and inserts. Much faster than upsert.
 
         Args:
             issues: List of issue embeddings to insert
@@ -121,7 +121,7 @@ class LanceDBStore:
         if not issues:
             return 0
 
-        # Deduplicate by issue_id (keep last occurrence for most recent data)
+        # Deduplicate by issue_id within batch (keep last occurrence)
         seen_ids: dict[str, JiraIssueEmbedding] = {}
         for issue in issues:
             seen_ids[issue.issue_id] = issue
@@ -129,13 +129,6 @@ class LanceDBStore:
 
         if len(unique_issues) < len(issues):
             logger.debug(f"Deduplicated {len(issues)} -> {len(unique_issues)} issues")
-
-        # Delete existing records first to prevent duplicates
-        issue_ids = [issue.issue_id for issue in unique_issues]
-        try:
-            self.issues_table.delete(f"issue_id IN {_format_sql_in_clause(issue_ids)}")
-        except Exception:
-            pass  # Table might be empty or IDs don't exist
 
         records = [issue.model_dump() for issue in unique_issues]
         self.issues_table.add(records)
