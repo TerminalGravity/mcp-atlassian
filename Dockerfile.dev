@@ -1,0 +1,28 @@
+# Development Dockerfile with sync-on-startup
+FROM ghcr.io/astral-sh/uv:python3.10-bookworm-slim
+
+WORKDIR /app
+
+# Install curl for healthcheck
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+
+# Install dependencies
+RUN uv sync --frozen --all-extras
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Create data directory
+RUN mkdir -p /app/data/lancedb
+
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/.venv/bin:$PATH"
+
+EXPOSE 8000
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

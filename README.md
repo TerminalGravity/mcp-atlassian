@@ -19,12 +19,52 @@ A fork of [mcp-atlassian](https://github.com/sooperset/mcp-atlassian) with enhan
 
 ---
 
-## Quick Start
+## Quick Start (Docker)
+
+The fastest way to get started. Requires only Docker.
+
+### 1. Clone and Configure
+
+```bash
+git clone https://github.com/TerminalGravity/mcp-atlassian.git
+cd mcp-atlassian
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+### 2. Start Everything
+
+```bash
+docker-compose up
+```
+
+This will:
+- Build the backend and frontend containers
+- Sync your Jira issues to the vector database (first run)
+- Start the API server on http://localhost:8000
+- Start the Web UI on http://localhost:3000
+
+### 3. Subsequent Runs
+
+```bash
+# Skip sync for faster startup
+SKIP_SYNC=true docker-compose up
+
+# Rebuild after code changes
+docker-compose up --build
+```
+
+---
+
+## Quick Start (Native)
+
+For development without Docker.
 
 ### Prerequisites
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
+- Node.js 20+
 - Jira Cloud account with API token
 - OpenAI API key (for vector embeddings)
 
@@ -38,23 +78,9 @@ uv sync --frozen --all-extras --dev
 
 ### 2. Configure Environment
 
-Create a `.env` file:
-
 ```bash
-# Jira Configuration
-JIRA_URL=https://your-company.atlassian.net
-JIRA_USERNAME=your.email@company.com
-JIRA_API_TOKEN=your_api_token
-
-# Confluence (optional)
-CONFLUENCE_URL=https://your-company.atlassian.net/wiki
-CONFLUENCE_USERNAME=your.email@company.com
-CONFLUENCE_API_TOKEN=your_api_token
-
-# Vector Search
-OPENAI_API_KEY=sk-...
-VECTOR_EMBEDDING_PROVIDER=openai
-VECTOR_DB_PATH=./data/lancedb
+cp .env.example .env
+# Edit .env with your Jira and OpenAI credentials
 ```
 
 ### 3. Sync Your Issues
