@@ -1,15 +1,49 @@
 "use client"
 
-import { useChat } from "@ai-sdk/react"
+import { useChat, type UIMessage } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
-import { useRef, useEffect, useState, useMemo } from "react"
+import { useRef, useEffect, useState, useMemo, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Button } from "@/components/ui/button"
 import { ChatMessage } from "./chat-message"
 import { ChatInput } from "./chat-input"
 import { StarterPrompts } from "./starter-prompts"
-import { Loader2, ChevronDown } from "lucide-react"
+import { Loader2, ChevronDown, Trash2 } from "lucide-react"
 import { useUser } from "@/contexts/user-context"
+
+const STORAGE_KEY = "jira-knowledge-chat-history"
+const MAX_STORED_MESSAGES = 100 // Prevent localStorage bloat
+
+function loadMessagesFromStorage(): UIMessage[] {
+  if (typeof window === "undefined") return []
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (!stored) return []
+    const parsed = JSON.parse(stored)
+    // Validate it's an array
+    if (!Array.isArray(parsed)) return []
+    return parsed.slice(-MAX_STORED_MESSAGES)
+  } catch {
+    return []
+  }
+}
+
+function saveMessagesToStorage(messages: UIMessage[]) {
+  if (typeof window === "undefined") return
+  try {
+    // Only store last N messages to prevent bloat
+    const toStore = messages.slice(-MAX_STORED_MESSAGES)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
+  } catch (e) {
+    console.warn("Failed to save chat history:", e)
+  }
+}
+
+function clearStoredMessages() {
+  if (typeof window === "undefined") return
+  localStorage.removeItem(STORAGE_KEY)
+}
 
 const MODELS = [
   { id: "gpt-5.2", label: "GPT-5.2", description: "Latest & strongest" },
@@ -30,9 +64,35 @@ export function ChatContainer() {
     api: "/api/chat",
   }), [])
 
-  const { messages, status, sendMessage } = useChat({
+  const { messages, status, sendMessage, setMessages } = useChat({
     transport,
   })
+
+  // Restore messages from localStorage on mount
+  const [hasRestored, setHasRestored] = useState(false)
+  useEffect(() => {
+    if (!hasRestored) {
+      const stored = loadMessagesFromStorage()
+      if (stored.length > 0) {
+        setMessages(stored)
+      }
+      setHasRestored(true)
+    }
+  }, [hasRestored, setMessages])
+
+  // Save messages to localStorage when they change (but not during restore)
+  useEffect(() => {
+    if (hasRestored && messages.length > 0) {
+      saveMessagesToStorage(messages)
+    }
+  }, [messages, hasRestored])
+
+  // Clear chat history
+  const handleClearHistory = useCallback(() => {
+    clearStoredMessages()
+    setMessages([])
+    setShowStarters(true)
+  }, [setMessages])
 
   const isLoading = status === "streaming" || status === "submitted"
 
@@ -47,9 +107,9 @@ export function ChatContainer() {
     }
   }, [messages])
 
-  // Hide starters after first user message
+  // Hide starters if we have messages (either loaded or new)
   useEffect(() => {
-    if (messages.some(m => m.role === "user")) {
+    if (messages.length > 0) {
       setShowStarters(false)
     }
   }, [messages])
@@ -85,7 +145,18 @@ export function ChatContainer() {
   return (
     <div className="flex flex-col h-[calc(100vh-57px)] max-w-4xl mx-auto">
       {/* Model Selector Header */}
-      <div className="flex items-center justify-end px-6 py-2 border-b bg-background/50">
+      <div className="flex items-center justify-end gap-2 px-6 py-2 border-b bg-background/50">
+        {messages.length > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleClearHistory}
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <Trash2 className="w-3 h-3 mr-1" />
+            Clear
+          </Button>
+        )}
         <div className="relative" data-dropdown>
           <button
             onClick={() => setShowModelMenu(!showModelMenu)}
