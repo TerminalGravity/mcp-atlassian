@@ -1,157 +1,127 @@
-# MCP Atlassian
+# MCP Atlassian (ADR Fork)
 
-![PyPI Version](https://img.shields.io/pypi/v/mcp-atlassian)
-![PyPI - Downloads](https://img.shields.io/pypi/dm/mcp-atlassian)
-![PePy - Total Downloads](https://static.pepy.tech/personalized-badge/mcp-atlassian?period=total&units=international_system&left_color=grey&right_color=blue&left_text=Total%20Downloads)
 [![Run Tests](https://github.com/TerminalGravity/mcp-atlassian/actions/workflows/tests.yml/badge.svg)](https://github.com/TerminalGravity/mcp-atlassian/actions/workflows/tests.yml)
 ![License](https://img.shields.io/github/license/TerminalGravity/mcp-atlassian)
-[![Docs](https://img.shields.io/badge/docs-mintlify-blue)](https://personal-1d37018d.mintlify.app)
 
-Model Context Protocol (MCP) server for Atlassian products (Confluence and Jira). Supports both Cloud and Server/Data Center deployments.
+A fork of [mcp-atlassian](https://github.com/sooperset/mcp-atlassian) with enhanced vector search, a web UI, and optimizations for AI-assisted development.
 
-https://github.com/user-attachments/assets/35303504-14c6-4ae4-913b-7c25ea511c3e
+## What's Different in This Fork
 
-<details>
-<summary>Confluence Demo</summary>
+| Feature | Description |
+|---------|-------------|
+| **Semantic Vector Search** | LanceDB-powered search with OpenAI embeddings for finding issues by meaning |
+| **Jira Knowledge Web UI** | Next.js chat interface for natural language queries against your Jira data |
+| **Query Caching** | In-memory caching with configurable TTL for faster repeated queries |
+| **Response Compression** | Optimized output formatting for Claude Code and other MCP clients |
+| **Tiered Tool Architecture** | Separate list vs. detail endpoints to reduce token usage |
+| **Comment Indexing** | Search across issue comments, not just titles and descriptions |
+| **Project Insights** | Aggregated analytics and pattern detection across issues |
 
-https://github.com/user-attachments/assets/7fe9c488-ad0c-4876-9b54-120b666bb785
-
-</details>
+---
 
 ## Quick Start
 
-### 1. Get Your API Token
+### Prerequisites
 
-Go to https://id.atlassian.com/manage-profile/security/api-tokens and create a token.
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) package manager
+- Jira Cloud account with API token
+- OpenAI API key (for vector embeddings)
 
-> For Server/Data Center, use a Personal Access Token instead. See [Authentication](https://personal-1d37018d.mintlify.app/docs/authentication).
-
-### 2. Configure Your IDE
-
-Add to your Claude Desktop or Cursor MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "mcp-atlassian": {
-      "command": "uvx",
-      "args": ["mcp-atlassian"],
-      "env": {
-        "JIRA_URL": "https://your-company.atlassian.net",
-        "JIRA_USERNAME": "your.email@company.com",
-        "JIRA_API_TOKEN": "your_api_token",
-        "CONFLUENCE_URL": "https://your-company.atlassian.net/wiki",
-        "CONFLUENCE_USERNAME": "your.email@company.com",
-        "CONFLUENCE_API_TOKEN": "your_api_token"
-      }
-    }
-  }
-}
-```
-
-> **Python 3.14 not yet supported.** Use `["--python=3.12", "mcp-atlassian"]` as args if needed.
-
-> **Server/Data Center users**: Use `JIRA_PERSONAL_TOKEN` instead of `JIRA_USERNAME` + `JIRA_API_TOKEN`. See [Authentication](https://personal-1d37018d.mintlify.app/docs/authentication) for details.
-
-### 3. Start Using
-
-Ask your AI assistant to:
-- **"Find issues assigned to me in PROJ project"**
-- **"Search Confluence for onboarding docs"**
-- **"Create a bug ticket for the login issue"**
-- **"Update the status of PROJ-123 to Done"**
-
-## Documentation
-
-Full documentation is available at **[personal-1d37018d.mintlify.app](https://personal-1d37018d.mintlify.app)**.
-
-Documentation is also available in [llms.txt format](https://llmstxt.org/), which LLMs can consume easily:
-- [`llms.txt`](https://personal-1d37018d.mintlify.app/llms.txt) — documentation sitemap
-- [`llms-full.txt`](https://personal-1d37018d.mintlify.app/llms-full.txt) — complete documentation
-
-| Topic | Description |
-|-------|-------------|
-| [Installation](https://personal-1d37018d.mintlify.app/docs/installation) | uvx, Docker, pip, from source |
-| [Authentication](https://personal-1d37018d.mintlify.app/docs/authentication) | API tokens, PAT, OAuth 2.0 |
-| [Configuration](https://personal-1d37018d.mintlify.app/docs/configuration) | IDE setup, environment variables |
-| [HTTP Transport](https://personal-1d37018d.mintlify.app/docs/http-transport) | SSE, streamable-http, multi-user |
-| [Tools Reference](https://personal-1d37018d.mintlify.app/docs/tools-reference) | All Jira & Confluence tools |
-| [Troubleshooting](https://personal-1d37018d.mintlify.app/docs/troubleshooting) | Common issues & debugging |
-
-## Compatibility
-
-| Product | Deployment | Support |
-|---------|------------|---------|
-| Confluence | Cloud | Fully supported |
-| Confluence | Server/Data Center | Supported (v6.0+) |
-| Jira | Cloud | Fully supported |
-| Jira | Server/Data Center | Supported (v8.14+) |
-
-## Key Tools
-
-| Jira | Confluence |
-|------|------------|
-| `jira_search` - Search with JQL | `confluence_search` - Search with CQL |
-| `jira_get_issue` - Get issue details | `confluence_get_page` - Get page content |
-| `jira_create_issue` - Create issues | `confluence_create_page` - Create pages |
-| `jira_update_issue` - Update issues | `confluence_update_page` - Update pages |
-| `jira_transition_issue` - Change status | `confluence_add_comment` - Add comments |
-| `jira_get_issue_sla` - Calculate SLA metrics | `confluence_get_page_views` - Get page view stats (Cloud only) |
-
-See [Tools Reference](https://personal-1d37018d.mintlify.app/docs/tools-reference) for the complete list.
-
-## Vector Search (Semantic Search)
-
-Enable semantic search across your Jira issues using vector embeddings. Find issues by meaning, not just keywords.
-
-### Setup
-
-Add your OpenAI API key (or use local embeddings):
-
-```json
-{
-  "env": {
-    "OPENAI_API_KEY": "sk-...",
-    "VECTOR_EMBEDDING_PROVIDER": "openai"
-  }
-}
-```
-
-For offline/air-gapped deployments, use local embeddings:
-
-```json
-{
-  "env": {
-    "VECTOR_EMBEDDING_PROVIDER": "local"
-  }
-}
-```
-
-### Sync Issues
+### 1. Clone and Install
 
 ```bash
-# Initial full sync
-mcp-atlassian-vector sync --full --projects DS,ENG
-
-# Incremental sync (only changed issues)
-mcp-atlassian-vector sync
-
-# Check status
-mcp-atlassian-vector status
-
-# Test search
-mcp-atlassian-vector search "API rate limiting"
+git clone https://github.com/TerminalGravity/mcp-atlassian.git
+cd mcp-atlassian
+uv sync --frozen --all-extras --dev
 ```
 
-### Vector Search Tools
+### 2. Configure Environment
+
+Create a `.env` file:
+
+```bash
+# Jira Configuration
+JIRA_URL=https://your-company.atlassian.net
+JIRA_USERNAME=your.email@company.com
+JIRA_API_TOKEN=your_api_token
+
+# Confluence (optional)
+CONFLUENCE_URL=https://your-company.atlassian.net/wiki
+CONFLUENCE_USERNAME=your.email@company.com
+CONFLUENCE_API_TOKEN=your_api_token
+
+# Vector Search
+OPENAI_API_KEY=sk-...
+VECTOR_EMBEDDING_PROVIDER=openai
+VECTOR_DB_PATH=./data/lancedb
+```
+
+### 3. Sync Your Issues
+
+```bash
+# Full sync of specific projects
+uv run python -m mcp_atlassian.vector.cli sync --full --projects DS,AI
+
+# Check sync status
+uv run python -m mcp_atlassian.vector.cli status
+```
+
+### 4. Run the MCP Server
+
+```bash
+uv run mcp-atlassian -v
+```
+
+---
+
+## Web UI (Jira Knowledge Chat)
+
+A conversational interface for querying your Jira data using natural language.
+
+![Jira Knowledge UI](web/docs/screenshots/jira-knowledge-results.png)
+
+### Running the Web UI
+
+**Terminal 1 - Backend:**
+```bash
+uv run uvicorn mcp_atlassian.web.server:app --host 0.0.0.0 --port 8000
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open http://localhost:3000
+
+### Features
+
+- Natural language queries with AI-generated summaries
+- Semantic search with vector embeddings
+- JQL search with graceful error handling
+- Issue statistics visualization (charts by status, type, project)
+- Dark theme UI
+- Starter prompts for common queries
+
+See [web/docs/JIRA-KNOWLEDGE-UI.md](web/docs/JIRA-KNOWLEDGE-UI.md) for detailed documentation.
+
+---
+
+## Vector Search Tools
+
+These tools are available when the MCP server is connected:
 
 | Tool | Description |
 |------|-------------|
-| `jira_semantic_search` | Find issues by meaning |
-| `jira_knowledge_query` | Natural language queries with auto-filters |
-| `jira_find_similar` | Find related issues |
-| `jira_detect_duplicates` | Check for duplicates before creating |
+| `jira_semantic_search` | Find issues by meaning, not just keywords |
+| `jira_knowledge_query` | Natural language queries with auto-extracted filters |
+| `jira_find_similar` | Find issues related to a specific issue |
+| `jira_detect_duplicates` | Check for potential duplicates before creating |
 | `jira_project_insights` | Aggregated patterns and analytics |
+| `jira_search_comments` | Search across issue comments |
 
 ### Configuration
 
@@ -163,14 +133,96 @@ mcp-atlassian-vector search "API rate limiting"
 | `VECTOR_SYNC_PROJECTS` | `*` | Projects to sync (comma-separated or `*`) |
 | `VECTOR_SYNC_INTERVAL_MINUTES` | `30` | Background sync interval |
 
-## Security
+---
 
-Never share API tokens. Keep `.env` files secure. See [SECURITY.md](SECURITY.md).
+## Standard MCP Tools
 
-## Contributing
+All upstream tools are available:
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+| Jira | Confluence |
+|------|------------|
+| `jira_search` - Search with JQL | `confluence_search` - Search with CQL |
+| `jira_get_issue` - Get issue details | `confluence_get_page` - Get page content |
+| `jira_create_issue` - Create issues | `confluence_create_page` - Create pages |
+| `jira_update_issue` - Update issues | `confluence_update_page` - Update pages |
+| `jira_transition_issue` - Change status | `confluence_add_comment` - Add comments |
+
+---
+
+## IDE Configuration
+
+### Claude Desktop / Cursor
+
+```json
+{
+  "mcpServers": {
+    "mcp-atlassian": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/mcp-atlassian", "run", "mcp-atlassian"],
+      "env": {
+        "JIRA_URL": "https://your-company.atlassian.net",
+        "JIRA_USERNAME": "your.email@company.com",
+        "JIRA_API_TOKEN": "your_api_token",
+        "OPENAI_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+---
+
+## Development
+
+### Setup
+
+```bash
+uv sync --frozen --all-extras --dev
+pre-commit install
+```
+
+### Commands
+
+```bash
+# Run tests
+uv run pytest
+
+# Run linting
+pre-commit run --all-files
+
+# Run server locally
+uv run mcp-atlassian -v
+
+# Vector CLI
+uv run python -m mcp_atlassian.vector.cli --help
+```
+
+### Project Structure
+
+```
+src/mcp_atlassian/
+├── jira/          # Jira client and operations
+├── confluence/    # Confluence client and operations
+├── models/        # Pydantic data models
+├── servers/       # MCP server implementations
+├── vector/        # Vector search (LanceDB + embeddings)
+├── web/           # FastAPI backend for web UI
+└── utils/         # Shared utilities
+
+web/               # Next.js frontend
+tests/             # Test suite
+```
+
+See [AGENTS.md](AGENTS.md) for detailed development guidelines.
+
+---
+
+## Upstream
+
+This fork is based on [sooperset/mcp-atlassian](https://github.com/sooperset/mcp-atlassian). Full upstream documentation is available at [personal-1d37018d.mintlify.app](https://personal-1d37018d.mintlify.app).
+
+---
 
 ## License
 
-MIT - See [LICENSE](LICENSE). Not an official Atlassian product.
+MIT - See [LICENSE](LICENSE).
