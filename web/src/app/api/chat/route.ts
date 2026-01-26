@@ -11,6 +11,198 @@ import {
 } from "ai"
 import { z } from "zod"
 
+// Types for refinements
+interface JiraIssue {
+  issue_id: string
+  summary: string
+  status: string
+  issue_type: string
+  project_key: string
+  assignee?: string | null
+  description_preview?: string | null
+  labels?: string[]
+  priority?: string
+  score: number
+}
+
+interface Refinement {
+  id: string
+  label: string
+  category: 'project' | 'time' | 'type' | 'priority' | 'status'
+  filter: {
+    field: string
+    value: string
+    operator: string
+  }
+  count?: number
+}
+
+interface RefinementsData {
+  originalQuery: string
+  totalResults: number
+  refinements: Refinement[]
+}
+
+// Generate search refinements from tool output issues
+function generateSearchRefinements(issues: JiraIssue[], originalQuery: string): RefinementsData | null {
+  // Don't generate refinements for small result sets
+  if (issues.length < 3) {
+    return null
+  }
+
+  const refinements: Refinement[] = []
+
+  // Group by project_key
+  const projectCounts = new Map<string, number>()
+  for (const issue of issues) {
+    if (issue.project_key) {
+      projectCounts.set(issue.project_key, (projectCounts.get(issue.project_key) || 0) + 1)
+    }
+  }
+
+  // Only add project refinements if there are 2+ different projects
+  if (projectCounts.size >= 2) {
+    for (const [project, count] of projectCounts.entries()) {
+      if (count >= 2) {
+        refinements.push({
+          id: `project-${project}`,
+          label: `${project} only (${count})`,
+          category: 'project',
+          filter: {
+            field: 'project_key',
+            value: project,
+            operator: '$eq'
+          },
+          count
+        })
+      }
+    }
+  }
+
+  // Group by status
+  const statusCounts = new Map<string, number>()
+  for (const issue of issues) {
+    if (issue.status) {
+      statusCounts.set(issue.status, (statusCounts.get(issue.status) || 0) + 1)
+    }
+  }
+
+  // Only add status refinements if there are 2+ different statuses
+  if (statusCounts.size >= 2) {
+    for (const [status, count] of statusCounts.entries()) {
+      if (count >= 2) {
+        refinements.push({
+          id: `status-${status.toLowerCase().replace(/\s+/g, '-')}`,
+          label: `${status} (${count})`,
+          category: 'status',
+          filter: {
+            field: 'status',
+            value: status,
+            operator: '$eq'
+          },
+          count
+        })
+      }
+    }
+  }
+
+  // Group by issue_type
+  const typeCounts = new Map<string, number>()
+  for (const issue of issues) {
+    if (issue.issue_type) {
+      typeCounts.set(issue.issue_type, (typeCounts.get(issue.issue_type) || 0) + 1)
+    }
+  }
+
+  // Only add type refinements if there are 2+ different types
+  if (typeCounts.size >= 2) {
+    for (const [type, count] of typeCounts.entries()) {
+      if (count >= 2) {
+        refinements.push({
+          id: `type-${type.toLowerCase().replace(/\s+/g, '-')}`,
+          label: `${type}s (${count})`,
+          category: 'type',
+          filter: {
+            field: 'issue_type',
+            value: type,
+            operator: '$eq'
+          },
+          count
+        })
+      }
+    }
+  }
+
+  // Group by priority (if available)
+  const priorityCounts = new Map<string, number>()
+  for (const issue of issues) {
+    if (issue.priority) {
+      priorityCounts.set(issue.priority, (priorityCounts.get(issue.priority) || 0) + 1)
+    }
+  }
+
+  // Only add priority refinements if there are 2+ different priorities
+  if (priorityCounts.size >= 2) {
+    for (const [priority, count] of priorityCounts.entries()) {
+      if (count >= 2) {
+        refinements.push({
+          id: `priority-${priority.toLowerCase().replace(/\s+/g, '-')}`,
+          label: `${priority} priority (${count})`,
+          category: 'priority',
+          filter: {
+            field: 'priority',
+            value: priority,
+            operator: '$eq'
+          },
+          count
+        })
+      }
+    }
+  }
+
+  // Only return refinements if we have at least one meaningful refinement
+  if (refinements.length === 0) {
+    return null
+  }
+
+  // Sort refinements by count (highest first) within each category
+  refinements.sort((a, b) => (b.count || 0) - (a.count || 0))
+
+  return {
+    originalQuery,
+    totalResults: issues.length,
+    refinements
+  }
+}
+
+// Extract issues from tool results (steps from AI SDK)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractIssuesFromSteps(steps: any[]): JiraIssue[] {
+  const allIssues: JiraIssue[] = []
+
+  for (const step of steps) {
+    if (step.toolResults && Array.isArray(step.toolResults)) {
+      for (const toolResult of step.toolResults) {
+        // Tool results have a 'result' property with the actual data
+        const result = toolResult.result as { issues?: JiraIssue[] } | undefined
+        if (result?.issues && Array.isArray(result.issues)) {
+          allIssues.push(...result.issues)
+        }
+      }
+    }
+  }
+
+  // Deduplicate by issue_id
+  const seen = new Set<string>()
+  return allIssues.filter(issue => {
+    if (seen.has(issue.issue_id)) {
+      return false
+    }
+    seen.add(issue.issue_id)
+    return true
+  })
+}
+
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000"
 
 // Supported models
@@ -360,7 +552,18 @@ export async function POST(request: Request) {
         },
         stopWhen: stepCountIs(5),
         temperature: 0.3,
-        onFinish: async ({ text }) => {
+        onFinish: async ({ text, steps }) => {
+          // Generate and emit refinements (before suggestions)
+          const allIssues = extractIssuesFromSteps(steps)
+          const refinementsData = generateSearchRefinements(allIssues, lastUserMessage)
+          if (refinementsData) {
+            writer.write({
+              type: 'data-refinements',
+              id: generateId(),
+              data: refinementsData
+            })
+          }
+
           // Generate and stream follow-up suggestions
           const suggestions = generateFollowUpSuggestions(text, lastUserMessage)
           if (suggestions.length > 0) {
