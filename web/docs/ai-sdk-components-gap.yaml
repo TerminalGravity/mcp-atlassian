@@ -1,0 +1,127 @@
+# AI SDK 6 Chatbot Components Gap Analysis
+# Reference: https://github.com/vercel/ai-chatbot/tree/main/components/ai-elements
+# Docs: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot
+
+project: jira-knowledge-web
+analysis_date: "2026-01-26"
+ai_sdk_version: "6.x"
+
+components:
+  # ============ IMPLEMENTED ============
+  implemented:
+    - name: message
+      status: implemented
+      file: src/components/chat/chat-message.tsx
+      notes: Full message rendering with parts support
+
+    - name: prompt-input
+      status: implemented
+      file: src/components/chat/chat-input.tsx
+      notes: Text input with stop button
+
+    - name: conversation
+      status: implemented
+      file: src/components/chat/chat-container.tsx
+      notes: Full conversation management with sidebar
+
+    - name: model-selector
+      status: implemented
+      file: src/components/chat/chat-container.tsx
+      notes: Dropdown in header
+
+    - name: reasoning
+      status: implemented
+      file: src/components/chat/reasoning.tsx
+      notes: Collapsible thinking display
+
+    - name: sources
+      status: implemented
+      file: src/components/chat/sources.tsx
+      notes: Issue sources with expand/collapse
+
+    - name: suggestion
+      status: implemented
+      file: src/components/chat/suggestion-chips.tsx
+      notes: Follow-up prompt chips
+
+    - name: tool
+      status: implemented
+      file: src/components/chat/chat-message.tsx
+      notes: ToolInvocation component for search results
+
+  # ============ PARTIAL ============
+  partial:
+    - name: shimmer
+      status: partial
+      current: Basic Loader2 spinner
+      needed: Skeleton shimmer loading states
+      priority: low
+
+  # ============ MISSING - PHASE 1 ============
+  missing:
+    - name: inline-citation
+      status: missing
+      priority: high
+      description: "[1]" style references linking text claims to specific Jira issues
+      value: Links AI statements to evidence, builds trust
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/inline-citation.tsx
+
+    - name: plan
+      status: missing
+      priority: high
+      description: Multi-step action plans showing intended search strategy
+      value: Shows user what AI will do before doing it
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/plan.tsx
+
+    - name: task
+      status: missing
+      priority: high
+      description: Task tracking with status indicators for multi-step operations
+      value: Visual progress for complex research queries
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/task.tsx
+
+    - name: chain-of-thought
+      status: missing
+      priority: medium
+      description: Step-by-step thinking process (different from reasoning tokens)
+      value: Transparency into AI decision making
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/chain-of-thought.tsx
+
+    - name: checkpoint
+      status: missing
+      priority: medium
+      description: Save/restore conversation state markers
+      value: Resume long conversations, branch explorations
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/checkpoint.tsx
+
+    - name: confirmation
+      status: missing
+      priority: medium
+      description: User approval prompts for actions
+      value: Human-in-the-loop for sensitive operations
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/confirmation.tsx
+
+    - name: context
+      status: missing
+      priority: medium
+      description: Display what context/data informed the response
+      value: Shows what Jira data was used
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/connection.tsx
+
+    - name: queue
+      status: missing
+      priority: low
+      description: Pending message queue visualization
+      value: Shows queued requests during high load
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/ai-elements/queue.tsx
+
+    - name: attachments
+      status: missing
+      priority: low
+      description: File upload and display in messages
+      value: Attach screenshots, documents to queries
+      reference: https://github.com/vercel/ai-chatbot/blob/main/components/preview-attachment.tsx
+
+# Phase 1: Core components (high priority)
+# Phase 2: Enhanced UX (medium priority)
+# Phase 3: Nice-to-have (low priority)
