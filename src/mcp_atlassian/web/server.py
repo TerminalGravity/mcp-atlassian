@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from mcp_atlassian.jira import JiraFacade
 from mcp_atlassian.vector.config import VectorConfig
 from mcp_atlassian.vector.embeddings import EmbeddingPipeline
+from mcp_atlassian.vector.scheduler import SyncScheduler
 from mcp_atlassian.vector.store import LanceDBStore
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ _store: LanceDBStore | None = None
 _pipeline: EmbeddingPipeline | None = None
 _openai: AsyncOpenAI | None = None
 _jira: JiraFacade | None = None
+_scheduler: SyncScheduler | None = None
 
 
 def get_jira() -> JiraFacade:
@@ -61,12 +63,32 @@ def get_openai() -> AsyncOpenAI:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize resources on startup."""
+    global _scheduler
     logger.info("Starting Jira Knowledge API server")
     # Pre-initialize connections
     get_store()
     get_pipeline()
     get_openai()
+
+    # Start background sync scheduler
+    config = VectorConfig.from_env()
+    if config.sync_interval_minutes > 0:
+        try:
+            jira = get_jira()
+            _scheduler = SyncScheduler(jira, config=config)
+            await _scheduler.start()
+            logger.info(f"Background sync enabled (interval: {config.sync_interval_minutes} min)")
+        except Exception as e:
+            logger.warning(f"Background sync disabled - Jira not configured: {e}")
+            _scheduler = None
+    else:
+        logger.info("Background sync disabled (VECTOR_SYNC_INTERVAL_MINUTES=0)")
+
     yield
+
+    # Stop background sync scheduler
+    if _scheduler:
+        await _scheduler.stop()
     logger.info("Shutting down Jira Knowledge API server")
 
 
@@ -219,11 +241,51 @@ async def health():
     """Health check endpoint."""
     store = get_store()
     stats = store.get_stats()
-    return {
+    response = {
         "status": "healthy",
         "indexed_issues": stats.get("total_issues", 0),
         "projects": stats.get("projects", []),
     }
+    # Include sync status if scheduler is running
+    if _scheduler:
+        response["sync"] = _scheduler.status
+    return response
+
+
+@app.get("/api/sync/status")
+async def sync_status():
+    """Get background sync status."""
+    if not _scheduler:
+        return {
+            "enabled": False,
+            "message": "Background sync not configured"
+        }
+    return {
+        "enabled": True,
+        **_scheduler.status
+    }
+
+
+@app.post("/api/sync/trigger")
+async def trigger_sync():
+    """Manually trigger an incremental sync."""
+    if not _scheduler:
+        raise HTTPException(
+            status_code=503,
+            detail="Background sync not configured. Set VECTOR_SYNC_INTERVAL_MINUTES > 0"
+        )
+    try:
+        result = await _scheduler.run_once()
+        return {
+            "success": True,
+            "issues_processed": result.issues_processed,
+            "issues_embedded": result.issues_embedded,
+            "duration_seconds": result.duration_seconds,
+            "errors": len(result.errors),
+        }
+    except Exception as e:
+        logger.error(f"Manual sync failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class VectorSearchRequest(BaseModel):
