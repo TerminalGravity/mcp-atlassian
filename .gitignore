@@ -78,3 +78,4 @@ playground/
 
 # Vector store data (LanceDB)
 data/
+.playwright-mcp/
