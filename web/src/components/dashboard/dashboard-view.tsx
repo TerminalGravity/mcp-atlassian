@@ -79,6 +79,53 @@ const AI_WORKFLOWS: AIWorkflow[] = [
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"
 
+// Workflow persistence
+const WORKFLOW_STORAGE_KEY = "jira-dashboard-workflow"
+
+interface StoredWorkflow {
+  workflowId: string
+  result: string
+  timestamp: number
+  user: string
+}
+
+function loadWorkflowFromStorage(user: string): StoredWorkflow | null {
+  if (typeof window === "undefined") return null
+  try {
+    const stored = localStorage.getItem(WORKFLOW_STORAGE_KEY)
+    if (!stored) return null
+    const parsed: StoredWorkflow = JSON.parse(stored)
+    // Only restore if same user and less than 24 hours old
+    const maxAge = 24 * 60 * 60 * 1000
+    if (parsed.user === user && Date.now() - parsed.timestamp < maxAge) {
+      return parsed
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function saveWorkflowToStorage(workflowId: string, result: string, user: string) {
+  if (typeof window === "undefined") return
+  try {
+    const data: StoredWorkflow = {
+      workflowId,
+      result,
+      timestamp: Date.now(),
+      user,
+    }
+    localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(data))
+  } catch (e) {
+    console.warn("Failed to save workflow result:", e)
+  }
+}
+
+function clearWorkflowStorage() {
+  if (typeof window === "undefined") return
+  localStorage.removeItem(WORKFLOW_STORAGE_KEY)
+}
+
 interface DashboardViewProps {
   currentUser: string
 }
@@ -90,6 +137,7 @@ export function DashboardView({ currentUser }: DashboardViewProps) {
   const [activeWorkflow, setActiveWorkflow] = useState<string | null>(null)
   const [workflowResult, setWorkflowResult] = useState<string>("")
   const [workflowLoading, setWorkflowLoading] = useState(false)
+  const [workflowTimestamp, setWorkflowTimestamp] = useState<number | null>(null)
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true)
@@ -145,6 +193,16 @@ export function DashboardView({ currentUser }: DashboardViewProps) {
     fetchDashboardData()
   }, [fetchDashboardData])
 
+  // Restore workflow from localStorage on mount
+  useEffect(() => {
+    const stored = loadWorkflowFromStorage(currentUser)
+    if (stored) {
+      setActiveWorkflow(stored.workflowId)
+      setWorkflowResult(stored.result)
+      setWorkflowTimestamp(stored.timestamp)
+    }
+  }, [currentUser])
+
   const runWorkflow = async (workflow: AIWorkflow) => {
     setActiveWorkflow(workflow.id)
     setWorkflowResult("")
@@ -179,6 +237,11 @@ export function DashboardView({ currentUser }: DashboardViewProps) {
         collected += chunk
         setWorkflowResult(collected)
       }
+
+      // Save completed result to localStorage
+      const now = Date.now()
+      saveWorkflowToStorage(workflow.id, collected, currentUser)
+      setWorkflowTimestamp(now)
     } catch (err) {
       setWorkflowResult(`Error: ${err instanceof Error ? err.message : "Unknown error"}`)
     } finally {
@@ -189,6 +252,8 @@ export function DashboardView({ currentUser }: DashboardViewProps) {
   const clearWorkflow = () => {
     setActiveWorkflow(null)
     setWorkflowResult("")
+    setWorkflowTimestamp(null)
+    clearWorkflowStorage()
   }
 
   return (
@@ -348,19 +413,31 @@ export function DashboardView({ currentUser }: DashboardViewProps) {
               >
                 <Card className="border-violet-500/20 bg-violet-500/5">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium flex items-center gap-2">
-                      {workflowLoading ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400" />
-                          Analyzing...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 className="w-3.5 h-3.5 text-violet-400" />
-                          AI Analysis
-                        </>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        {workflowLoading ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400" />
+                            Analyzing...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5 text-violet-400" />
+                            AI Analysis
+                          </>
+                        )}
+                      </CardTitle>
+                      {workflowTimestamp && !workflowLoading && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(workflowTimestamp).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </span>
                       )}
-                    </CardTitle>
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <ScrollArea className="h-[300px]">
