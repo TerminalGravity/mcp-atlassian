@@ -14,6 +14,10 @@ import {
   ChainOfThoughtCard,
   type StepStatus,
 } from "@/components/ai-elements/chain-of-thought"
+import {
+  CitationBadge,
+  type CitationSource,
+} from "@/components/ai-elements/inline-citation"
 
 interface ChatMessageProps {
   message: UIMessage
@@ -30,6 +34,91 @@ interface JiraIssue {
   description_preview?: string | null
   labels?: string[]
   score: number
+}
+
+// Parse text for citation references like [1], [2], [1, 2]
+// Returns array of { text: string, citations?: number[] } segments
+function parseTextForCitations(text: string): Array<{ text: string; citations?: number[] }> {
+  const segments: Array<{ text: string; citations?: number[] }> = []
+  // Match [n] or [n, m, ...] patterns
+  const citationRegex = /\[(\d+(?:\s*,\s*\d+)*)\]/g
+  let lastIndex = 0
+  let match
+
+  while ((match = citationRegex.exec(text)) !== null) {
+    // Add text before citation
+    if (match.index > lastIndex) {
+      segments.push({ text: text.slice(lastIndex, match.index) })
+    }
+    // Parse citation numbers
+    const citations = match[1].split(/\s*,\s*/).map(n => parseInt(n, 10))
+    segments.push({ text: '', citations })
+    lastIndex = citationRegex.lastIndex
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    segments.push({ text: text.slice(lastIndex) })
+  }
+
+  return segments
+}
+
+// Check if text contains any citation patterns
+function hasCitations(text: string): boolean {
+  return /\[\d+(?:\s*,\s*\d+)*\]/.test(text)
+}
+
+// Build citation sources from issues array
+function buildCitationSources(issues: JiraIssue[]): Map<number, CitationSource[]> {
+  const sourceMap = new Map<number, CitationSource[]>()
+  issues.forEach((issue, index) => {
+    const citationNumber = index + 1 // Citations are 1-indexed
+    sourceMap.set(citationNumber, [{
+      id: issue.issue_id,
+      issueKey: issue.issue_id,
+      summary: issue.summary,
+      status: issue.status,
+      description: issue.description_preview || undefined,
+    }])
+  })
+  return sourceMap
+}
+
+// Component to render text with inline citations
+function TextWithCitations({
+  text,
+  issues,
+  className,
+}: {
+  text: string
+  issues: JiraIssue[]
+  className?: string
+}) {
+  const segments = parseTextForCitations(text)
+  const sourceMap = buildCitationSources(issues)
+
+  return (
+    <span className={className}>
+      {segments.map((segment, i) => {
+        if (segment.citations) {
+          // Render citation badges
+          return segment.citations.map((citationNum, j) => {
+            const sources = sourceMap.get(citationNum)
+            if (!sources) return <span key={`${i}-${j}`}>[{citationNum}]</span>
+            return (
+              <CitationBadge
+                key={`${i}-${j}`}
+                index={citationNum}
+                sources={sources}
+              />
+            )
+          })
+        }
+        return <span key={i}>{segment.text}</span>
+      })}
+    </span>
+  )
 }
 
 // Tool configuration for display
@@ -186,6 +275,13 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
           >
             {isUser ? (
               <p className="whitespace-pre-wrap leading-relaxed">{textContent}</p>
+            ) : hasCitations(textContent) && allIssues.length > 0 ? (
+              // Render with inline citation support
+              <TextWithCitations
+                text={textContent}
+                issues={allIssues}
+                className="whitespace-pre-wrap"
+              />
             ) : (
               <Streamdown>{textContent}</Streamdown>
             )}

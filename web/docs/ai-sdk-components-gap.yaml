@@ -55,7 +55,7 @@ components:
       status: implemented
       file: src/components/ai-elements/inline-citation.tsx
       notes: Full HoverCard carousel with Jira issue citations
-      integration: NOT YET INTEGRATED into chat-message.tsx
+      integration: INTEGRATED - CitationBadge used in chat-message.tsx for [n] references
 
     - name: plan
       status: implemented
@@ -139,8 +139,8 @@ integration:
   completed:
     - Context (ContextJiraCard) - Shows Jira sources referenced
     - ChainOfThought (ChainOfThoughtCard) - Shows tool execution steps with results
+    - InlineCitation (CitationBadge) - Parses [n] patterns and renders hover cards
   tasks:
-    - Add InlineCitation for source references in text
     - Add Plan for multi-step search strategies
     - Wire up Checkpoint for conversation state
     - Add Confirmation for sensitive actions
@@ -165,7 +165,7 @@ phases:
 
   integration:
     name: Wire into Chat Interface
-    status: IN PROGRESS (2/7 complete)
+    status: IN PROGRESS (3/7 complete)
     priority: CRITICAL
-    completed: [context, chain-of-thought]
-    remaining: [inline-citation, plan, checkpoint, confirmation, task]
+    completed: [context, chain-of-thought, inline-citation]
+    remaining: [plan, checkpoint, confirmation, task]
