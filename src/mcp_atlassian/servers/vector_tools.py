@@ -2005,3 +2005,283 @@ async def jira_resolution_patterns(
             "error": str(e),
             "query": query,
         }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "cross-project"},
+    annotations={"title": "Cross-Project Patterns", "readOnlyHint": True},
+)
+async def jira_cross_project_patterns(
+    ctx: Context,
+    topic: Annotated[
+        str,
+        Field(
+            description=(
+                "Topic or feature to find patterns for across projects. "
+                "Examples: 'webhook integration', 'SSO configuration', "
+                "'payment processing', 'API authentication'"
+            )
+        ),
+    ],
+    projects: Annotated[
+        str,
+        Field(
+            description=(
+                "Comma-separated project keys to compare (e.g., 'DS,IM,PP,CS'). "
+                "Must include at least 2 projects for comparison."
+            )
+        ),
+    ],
+    limit_per_project: Annotated[
+        int,
+        Field(
+            description="Maximum results per project (1-10)",
+            ge=1,
+            le=10,
+            default=5,
+        ),
+    ] = 5,
+    min_score: Annotated[
+        float,
+        Field(
+            description="Minimum relevance score (0.0-1.0)",
+            ge=0.0,
+            le=1.0,
+            default=0.4,
+        ),
+    ] = 0.4,
+) -> str:
+    """
+    Find implementation patterns for a topic across multiple projects.
+
+    Compares how different projects handle similar features or issues,
+    enabling cross-project learning. Useful for:
+    - Discovering how different teams solved similar problems
+    - Finding reusable patterns across implementations
+    - Comparing approaches between projects
+
+    Returns issues grouped by project with relevance scores.
+
+    Args:
+        ctx: The FastMCP context.
+        topic: Topic or feature to search for.
+        projects: Comma-separated project keys to compare.
+        limit_per_project: Maximum results per project.
+        min_score: Minimum similarity score threshold.
+
+    Returns:
+        JSON string with issues grouped by project for comparison.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+
+        # Parse projects
+        project_list = [p.strip().upper() for p in projects.split(",")]
+        if len(project_list) < 2:
+            return json.dumps({
+                "error": "At least 2 projects required for comparison",
+                "provided": project_list,
+            }, indent=2)
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "No issues indexed yet",
+                "hint": "Run sync first: mcp-atlassian-vector sync --full",
+            }, indent=2)
+
+        # Generate query embedding
+        query_vector = await embedder.embed(topic)
+
+        # Search each project separately
+        project_results: dict[str, list[dict[str, Any]]] = {}
+        total_found = 0
+
+        for project in project_list:
+            filters = {"project_key": project}
+
+            results, count = store.search_issues(
+                query_vector=query_vector,
+                limit=limit_per_project,
+                filters=filters,
+                min_score=min_score,
+            )
+
+            if results:
+                project_results[project] = [
+                    {
+                        "key": r["issue_id"],
+                        "summary": r["summary"][:120],
+                        "type": r["issue_type"],
+                        "status": r["status"],
+                        "score": round(r.get("score", 0), 3),
+                    }
+                    for r in results
+                ]
+                total_found += len(results)
+            else:
+                project_results[project] = []
+
+        # Build comparison response
+        response = {
+            "topic": topic,
+            "projects_compared": project_list,
+            "total_matches": total_found,
+            "by_project": project_results,
+            "coverage": {
+                project: len(issues) > 0
+                for project, issues in project_results.items()
+            },
+            "hint": "Use jira_get_issue with issue key for full details",
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"Cross-project patterns error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "topic": topic,
+        }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "analytics"},
+    annotations={"title": "Project Feature Matrix", "readOnlyHint": True},
+)
+async def jira_project_feature_matrix(
+    ctx: Context,
+    features: Annotated[
+        str,
+        Field(
+            description=(
+                "Comma-separated features to check across projects. "
+                "Examples: 'webhook,sso,api,reporting,notifications'"
+            )
+        ),
+    ],
+    projects: Annotated[
+        str,
+        Field(
+            description="Comma-separated project keys to compare (e.g., 'DS,IM,PP,CS')"
+        ),
+    ],
+    min_score: Annotated[
+        float,
+        Field(
+            description="Minimum score to consider feature present",
+            ge=0.0,
+            le=1.0,
+            default=0.5,
+        ),
+    ] = 0.5,
+) -> str:
+    """
+    Generate a feature comparison matrix across projects.
+
+    Checks which features are present (have issues) in each project,
+    creating a matrix view of feature coverage. Useful for:
+    - Understanding feature parity across projects
+    - Identifying gaps in implementations
+    - Planning feature rollouts
+
+    Args:
+        ctx: The FastMCP context.
+        features: Comma-separated feature keywords to check.
+        projects: Comma-separated project keys to compare.
+        min_score: Minimum score to consider feature present.
+
+    Returns:
+        JSON string with feature presence matrix across projects.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+
+        # Parse inputs
+        feature_list = [f.strip().lower() for f in features.split(",")]
+        project_list = [p.strip().upper() for p in projects.split(",")]
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "No issues indexed yet",
+                "hint": "Run sync first",
+            }, indent=2)
+
+        # Build matrix
+        matrix: dict[str, dict[str, dict[str, Any]]] = {}
+
+        for feature in feature_list:
+            matrix[feature] = {}
+
+            # Generate embedding for feature
+            feature_vector = await embedder.embed(feature)
+
+            for project in project_list:
+                filters = {"project_key": project}
+
+                results, count = store.search_issues(
+                    query_vector=feature_vector,
+                    limit=3,
+                    filters=filters,
+                    min_score=min_score,
+                )
+
+                if results:
+                    top_result = results[0]
+                    matrix[feature][project] = {
+                        "present": True,
+                        "issue_count": len(results),
+                        "top_match": {
+                            "key": top_result["issue_id"],
+                            "summary": top_result["summary"][:80],
+                            "score": round(top_result.get("score", 0), 3),
+                        },
+                    }
+                else:
+                    matrix[feature][project] = {
+                        "present": False,
+                        "issue_count": 0,
+                    }
+
+        # Calculate summary stats
+        project_coverage = {
+            project: sum(
+                1 for f in feature_list if matrix[f][project]["present"]
+            ) / len(feature_list)
+            for project in project_list
+        }
+
+        feature_adoption = {
+            feature: sum(
+                1 for p in project_list if matrix[feature][p]["present"]
+            ) / len(project_list)
+            for feature in feature_list
+        }
+
+        response = {
+            "features": feature_list,
+            "projects": project_list,
+            "matrix": matrix,
+            "summary": {
+                "project_coverage": {
+                    p: f"{round(v * 100)}%" for p, v in project_coverage.items()
+                },
+                "feature_adoption": {
+                    f: f"{round(v * 100)}%" for f, v in feature_adoption.items()
+                },
+            },
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"Feature matrix error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "features": features,
+        }, indent=2)
