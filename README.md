@@ -56,17 +56,15 @@ docker-compose up --build
 
 ---
 
-## Quick Start (Native)
+## Quick Start (Local)
 
 For development without Docker.
 
 ### Prerequisites
 
-- Python 3.10+
-- [uv](https://docs.astral.sh/uv/) package manager
-- Node.js 20+
-- Jira Cloud account with API token
-- OpenAI API key (for vector embeddings)
+- Python 3.10+ with [uv](https://docs.astral.sh/uv/)
+- Node.js 20+ with pnpm
+- Jira Cloud API token + OpenAI API key
 
 ### 1. Clone and Install
 
@@ -74,6 +72,7 @@ For development without Docker.
 git clone https://github.com/TerminalGravity/mcp-atlassian.git
 cd mcp-atlassian
 uv sync --frozen --all-extras --dev
+cd web && pnpm install
 ```
 
 ### 2. Configure Environment
@@ -83,17 +82,24 @@ cp .env.example .env
 # Edit .env with your Jira and OpenAI credentials
 ```
 
-### 3. Sync Your Issues
+### 3. Sync Your Issues (first time only)
 
 ```bash
-# Full sync of specific projects
 uv run python -m mcp_atlassian.vector.cli sync --full --projects DS,AI
-
-# Check sync status
-uv run python -m mcp_atlassian.vector.cli status
 ```
 
-### 4. Run the MCP Server
+### 4. Start Development
+
+```bash
+cd web
+pnpm dev
+```
+
+This starts both the backend (port 8000) and frontend (port 3000) with a single command.
+
+Open http://localhost:3000
+
+### Run MCP Server Only
 
 ```bash
 uv run mcp-atlassian -v
