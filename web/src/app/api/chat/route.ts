@@ -160,6 +160,28 @@ function generateSearchRefinements(issues: JiraIssue[], originalQuery: string): 
     }
   }
 
+  // Add time-based refinements (static, JQL-compatible)
+  // These don't have counts since JiraIssue doesn't include timestamp data,
+  // but they enable filtering by time range in subsequent queries
+  const timeRefinements = [
+    { id: 'time-7d', label: 'Last 7 days', value: '-7d' },
+    { id: 'time-30d', label: 'Last 30 days', value: '-30d' },
+    { id: 'time-90d', label: 'Last 90 days', value: '-90d' },
+  ]
+
+  for (const timeRef of timeRefinements) {
+    refinements.push({
+      id: timeRef.id,
+      label: timeRef.label,
+      category: 'time',
+      filter: {
+        field: 'updated',
+        value: timeRef.value,
+        operator: '>='
+      }
+    })
+  }
+
   // Only return refinements if we have at least one meaningful refinement
   if (refinements.length === 0) {
     return null
