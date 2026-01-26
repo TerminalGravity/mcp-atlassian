@@ -49,7 +49,7 @@ export function ChatContainer() {
     api: "/api/chat",
   }), [])
 
-  const { messages, status, sendMessage, setMessages } = useChat({
+  const { messages, status, sendMessage, setMessages, stop } = useChat({
     transport,
   })
 
@@ -295,7 +295,7 @@ export function ChatContainer() {
                   exit={{ opacity: 0, y: -20 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <StarterPrompts onSelect={handleStarterSelect} />
+                  <StarterPrompts onSelect={handleStarterSelect} isLoading={isLoading} />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -339,7 +339,7 @@ export function ChatContainer() {
           className="px-6 py-4 border-t bg-background/95 backdrop-blur"
         >
           <div className="max-w-4xl mx-auto">
-            <ChatInput onSend={onSend} isLoading={isLoading} />
+            <ChatInput onSend={onSend} onStop={stop} isLoading={isLoading} />
             <p className="text-[10px] text-center text-muted-foreground mt-2">
               Searches use vector embeddings + JQL for comprehensive results
             </p>

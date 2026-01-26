@@ -3,15 +3,16 @@
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { Send, Loader2 } from "lucide-react"
+import { Send, Square } from "lucide-react"
 
 interface ChatInputProps {
   onSend: (message: string) => void
+  onStop?: () => void
   isLoading?: boolean
   placeholder?: string
 }
 
-export function ChatInput({ onSend, isLoading, placeholder = "Ask about Jira issues..." }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isLoading, placeholder = "Ask about Jira issues..." }: ChatInputProps) {
   const [input, setInput] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -53,18 +54,26 @@ export function ChatInput({ onSend, isLoading, placeholder = "Ask about Jira iss
             "min-h-[44px] max-h-[200px]"
           )}
         />
-        <Button
-          type="submit"
-          size="icon"
-          disabled={!input.trim() || isLoading}
-          className="h-10 w-10 shrink-0 rounded-xl"
-        >
-          {isLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
+        {isLoading && onStop ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="destructive"
+            onClick={onStop}
+            className="h-10 w-10 shrink-0 rounded-xl"
+          >
+            <Square className="h-4 w-4 fill-current" />
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            size="icon"
+            disabled={!input.trim() || isLoading}
+            className="h-10 w-10 shrink-0 rounded-xl"
+          >
             <Send className="h-4 w-4" />
-          )}
-        </Button>
+          </Button>
+        )}
       </div>
       <p className="mt-2 text-center text-xs text-muted-foreground">
         Press Enter to send, Shift+Enter for new line

@@ -12,6 +12,7 @@ import {
 
 interface StarterPromptsProps {
   onSelect: (prompt: string) => void
+  isLoading?: boolean
 }
 
 const prompts = [
@@ -68,7 +69,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 }
 
-export function StarterPrompts({ onSelect }: StarterPromptsProps) {
+export function StarterPrompts({ onSelect, isLoading }: StarterPromptsProps) {
   return (
     <div className="flex flex-col items-center justify-center py-8 px-4">
       <motion.div
@@ -95,10 +96,11 @@ export function StarterPrompts({ onSelect }: StarterPromptsProps) {
           <motion.button
             key={i}
             variants={item}
-            whileHover={{ scale: 1.02, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => onSelect(p.prompt)}
-            className="group relative flex flex-col items-start gap-2 p-4 rounded-xl border bg-card text-left transition-all hover:border-primary/50 hover:shadow-lg"
+            whileHover={isLoading ? {} : { scale: 1.02, y: -2 }}
+            whileTap={isLoading ? {} : { scale: 0.98 }}
+            onClick={() => !isLoading && onSelect(p.prompt)}
+            disabled={isLoading}
+            className="group relative flex flex-col items-start gap-2 p-4 rounded-xl border bg-card text-left transition-all hover:border-primary/50 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:shadow-none"
           >
             <div className={`p-2 rounded-lg bg-gradient-to-br ${p.color} text-white`}>
               <p.icon className="w-4 h-4" />
