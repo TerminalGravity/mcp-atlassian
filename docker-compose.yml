@@ -31,10 +31,8 @@ services:
     env_file:
       - .env
     environment:
-      # Client-side requests (browser) use localhost
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
-      # Server-side requests (SSR) use Docker network
-      - API_URL=http://backend:8000
+      # Server-side API calls use Docker network
+      - BACKEND_URL=http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
