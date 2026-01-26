@@ -1,7 +1,8 @@
 "use client"
 
 import { useChat } from "@ai-sdk/react"
-import { useRef, useEffect, useState } from "react"
+import { DefaultChatTransport } from "ai"
+import { useRef, useEffect, useState, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ChatMessage } from "./chat-message"
@@ -18,7 +19,13 @@ const MODELS = [
 type ModelId = typeof MODELS[number]["id"]
 
 // Team members for role-play as currentUser() - queried from DS project
-const TEAM_MEMBERS = [
+interface TeamMember {
+  id: string
+  name: string
+  initials: string
+}
+
+const TEAM_MEMBERS: TeamMember[] = [
   { id: "Josh Houghtelin", name: "Josh Houghtelin", initials: "JH" },
   { id: "Kim Robinson", name: "Kim Robinson", initials: "KR" },
   { id: "Joe Muto", name: "Joe Muto", initials: "JM" },
@@ -26,19 +33,23 @@ const TEAM_MEMBERS = [
   { id: "Suhrob Ulmasov (Stan)", name: "Stan Ulmasov", initials: "SU" },
   { id: "Zechariah Walden", name: "Zech Walden", initials: "ZW" },
   { id: "Niranjan Singh", name: "Niranjan Singh", initials: "NS" },
-] as const
+]
 
 export function ChatContainer() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showStarters, setShowStarters] = useState(true)
   const [selectedModel, setSelectedModel] = useState<ModelId>("gpt-5.2")
   const [showModelMenu, setShowModelMenu] = useState(false)
-  const [selectedUser, setSelectedUser] = useState(TEAM_MEMBERS[0])
+  const [selectedUser, setSelectedUser] = useState<TeamMember>(TEAM_MEMBERS[0])
   const [showUserMenu, setShowUserMenu] = useState(false)
 
-  const { messages, status, sendMessage } = useChat({
+  // Create transport - memoized to avoid recreating on every render
+  const transport = useMemo(() => new DefaultChatTransport({
     api: "/api/chat",
-    body: { model: selectedModel, currentUser: selectedUser.id },
+  }), [])
+
+  const { messages, status, sendMessage } = useChat({
+    transport,
   })
 
   const isLoading = status === "streaming" || status === "submitted"
@@ -223,7 +234,7 @@ export function ChatContainer() {
 
           {/* Chat Messages */}
           {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
+            <ChatMessage key={message.id} message={message} onSendMessage={onSend} />
           ))}
 
           {/* Loading indicator */}

@@ -5,11 +5,12 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts"
 import { Card } from "@/components/ui/card"
 
 interface JiraIssue {
-  issue_id: string
+  issue_id?: string
+  key?: string
   summary: string
   status: string
-  issue_type: string
-  project_key: string
+  issue_type?: string
+  project_key?: string
   assignee?: string | null
 }
 

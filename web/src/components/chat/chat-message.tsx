@@ -6,13 +6,15 @@ import { Avatar } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { UIMessage } from "ai"
-import { Bot, User, ExternalLink, Search, Database, ChevronDown, ChevronUp, AlertCircle } from "lucide-react"
+import { Bot, User, ExternalLink, Search, Database, ChevronDown, ChevronUp, AlertCircle, GitBranch, Link2 } from "lucide-react"
 import { useState } from "react"
 import { IssueStats } from "./issue-stats"
 import { Streamdown } from "streamdown"
+import { SuggestionChips } from "./suggestion-chips"
 
 interface ChatMessageProps {
   message: UIMessage
+  onSendMessage?: (text: string) => void
 }
 
 interface JiraIssue {
@@ -77,7 +79,7 @@ function SourceCard({ source, index }: { source: JiraIssue; index: number }) {
 
 function ToolInvocation({ toolName, input, output, state, index }: {
   toolName: string
-  input?: { query?: string; jql?: string; limit?: number }
+  input?: { query?: string; jql?: string; limit?: number; epicKey?: string; issueKey?: string }
   output?: { issues?: JiraIssue[]; count?: number; error?: string; suggestion?: string }
   state?: string
   index: number
@@ -91,6 +93,44 @@ function ToolInvocation({ toolName, input, output, state, index }: {
   // Extract query/jql from input
   const queryText = input?.query
   const jqlText = input?.jql
+  const epicKey = input?.epicKey
+  const issueKey = input?.issueKey
+
+  // Tool display configuration
+  const toolConfig: Record<string, { icon: typeof Search; label: string; color: string; description: string }> = {
+    semantic_search: {
+      icon: Search,
+      label: "Semantic Search",
+      color: "text-blue-500",
+      description: queryText ? `"${queryText}"` : "searching...",
+    },
+    jql_search: {
+      icon: Database,
+      label: "JQL Search",
+      color: "text-purple-500",
+      description: jqlText || "querying...",
+    },
+    get_epic_children: {
+      icon: GitBranch,
+      label: "Epic Children",
+      color: "text-green-500",
+      description: epicKey ? `Fetching children of ${epicKey}` : "loading...",
+    },
+    get_linked_issues: {
+      icon: Link2,
+      label: "Linked Issues",
+      color: "text-orange-500",
+      description: issueKey ? `Getting links for ${issueKey}` : "loading...",
+    },
+  }
+
+  const config = toolConfig[toolName] || {
+    icon: Search,
+    label: toolName,
+    color: "text-muted-foreground",
+    description: "processing...",
+  }
+  const Icon = config.icon
 
   return (
     <motion.div
@@ -106,18 +146,10 @@ function ToolInvocation({ toolName, input, output, state, index }: {
           isComplete ? "bg-muted/30 hover:bg-muted/50" : "bg-muted animate-pulse"
         )}
       >
-        {toolName === "semantic_search" ? (
-          <Search className="w-4 h-4 text-blue-500" />
-        ) : (
-          <Database className="w-4 h-4 text-purple-500" />
-        )}
-        <span className="font-medium">
-          {toolName === "semantic_search" ? "Semantic Search" : "JQL Search"}
-        </span>
+        <Icon className={cn("w-4 h-4", config.color)} />
+        <span className="font-medium">{config.label}</span>
         <span className="text-muted-foreground truncate flex-1 text-left">
-          {toolName === "semantic_search"
-            ? queryText ? `"${queryText}"` : "searching..."
-            : jqlText || "querying..."}
+          {config.description}
         </span>
         {isComplete && (
           <>
@@ -187,7 +219,7 @@ function ToolInvocation({ toolName, input, output, state, index }: {
   )
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
   const isUser = message.role === "user"
   const parts = message.parts || []
 
@@ -198,6 +230,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
   }))
   const textParts = parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
   const textContent = textParts.map(p => p.text).join('')
+
+  // Extract data-suggestions parts
+  const suggestionParts = parts.filter((p): p is { type: 'data-suggestions'; data: { prompts: string[] } } =>
+    p.type === 'data-suggestions'
+  )
 
   return (
     <motion.div
@@ -253,6 +290,15 @@ export function ChatMessage({ message }: ChatMessageProps) {
             )}
           </motion.div>
         )}
+
+        {/* Follow-up suggestions */}
+        {!isUser && suggestionParts.length > 0 && suggestionParts.map((part, i) => (
+          <SuggestionChips
+            key={`suggestions-${i}`}
+            prompts={part.data.prompts}
+            onSelect={onSendMessage}
+          />
+        ))}
       </div>
     </motion.div>
   )

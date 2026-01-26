@@ -355,6 +355,82 @@ async def jql_search(request: JQLSearchRequest):
         }
 
 
+class LinkedIssuesRequest(BaseModel):
+    """Request to get linked issues."""
+    issueKey: str
+
+
+@app.post("/api/linked-issues")
+async def get_linked_issues(request: LinkedIssuesRequest):
+    """Get issues linked to a specific issue."""
+    issue_key = request.issueKey.strip()
+    if not issue_key:
+        raise HTTPException(status_code=400, detail="Issue key is required")
+
+    # Try to get Jira client
+    try:
+        jira = get_jira()
+    except Exception as e:
+        logger.warning(f"Jira not configured: {e}")
+        return {
+            "issues": [],
+            "count": 0,
+            "error": "Jira connection not configured"
+        }
+
+    try:
+        # Get the issue with its links
+        issue = jira.get_issue(issue_key)
+
+        # Extract linked issue keys from the raw issue data
+        linked_keys: list[str] = []
+        raw_issue = issue._raw if hasattr(issue, '_raw') else {}
+        issuelinks = raw_issue.get('fields', {}).get('issuelinks', [])
+
+        for link in issuelinks:
+            # Links can be inward or outward
+            if 'outwardIssue' in link:
+                linked_keys.append(link['outwardIssue']['key'])
+            if 'inwardIssue' in link:
+                linked_keys.append(link['inwardIssue']['key'])
+
+        if not linked_keys:
+            return {"issues": [], "count": 0}
+
+        # Fetch the linked issues
+        jql = f"key in ({','.join(linked_keys)})"
+        result = jira.search_issues(jql, limit=20)
+
+        # Format results
+        issues = []
+        for iss in result.issues:
+            status_name = iss.status.name if iss.status else "Unknown"
+            issue_type_name = iss.issue_type.name if iss.issue_type else "Unknown"
+            assignee_name = iss.assignee.display_name if iss.assignee else None
+            project_key = iss.project.key if iss.project else iss.key.split("-")[0]
+
+            issues.append({
+                "issue_id": iss.key,
+                "summary": iss.summary,
+                "status": status_name,
+                "issue_type": issue_type_name,
+                "project_key": project_key,
+                "assignee": assignee_name,
+                "description_preview": iss.description[:300] if iss.description else None,
+                "score": 1.0,
+            })
+
+        return {"issues": issues, "count": len(issues)}
+
+    except Exception as e:
+        logger.warning(f"Linked issues error for {issue_key}: {e}")
+        return {
+            "issues": [],
+            "count": 0,
+            "error": f"Failed to get linked issues: {str(e)[:100]}"
+        }
+
+
 def main():
     """Run the server."""
     import uvicorn
