@@ -84,12 +84,12 @@ export function ChatContainer() {
 
   const onSend = (content: string) => {
     setShowStarters(false)
-    sendMessage({ text: content })
+    sendMessage({ text: content }, { body: { model: selectedModel, currentUser: selectedUser.id } })
   }
 
   const handleStarterSelect = (prompt: string) => {
     setShowStarters(false)
-    sendMessage({ text: prompt })
+    sendMessage({ text: prompt }, { body: { model: selectedModel, currentUser: selectedUser.id } })
   }
 
   return (

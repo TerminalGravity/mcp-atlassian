@@ -187,7 +187,7 @@ async def search(request: SearchRequest) -> SearchResponse:
 
         # Search the vector store
         store = get_store()
-        results = store.search_issues(query_vector, limit=10)
+        results, _ = store.search_issues(query_vector, limit=10)
 
         # Generate answer
         answer = await generate_answer(query, results)
@@ -250,7 +250,7 @@ async def vector_search(request: VectorSearchRequest):
         query_vector = await pipeline.embed(query)
 
         store = get_store()
-        results = store.search_issues(query_vector, limit=request.limit)
+        results, total_count = store.search_issues(query_vector, limit=request.limit)
 
         # Format results
         issues = [
