@@ -246,11 +246,17 @@ async def vector_search(request: VectorSearchRequest):
         raise HTTPException(status_code=400, detail="Query is required")
 
     try:
+        logger.info(f"Vector search: query='{query}', limit={request.limit}")
         pipeline = get_pipeline()
         query_vector = await pipeline.embed(query)
+        logger.info(f"Generated embedding with {len(query_vector)} dimensions")
 
         store = get_store()
+        stats = store.get_stats()
+        logger.info(f"Vector store stats: {stats.get('total_issues', 0)} issues indexed")
+
         results, total_count = store.search_issues(query_vector, limit=request.limit)
+        logger.info(f"Vector search returned {len(results)} results (total matching: {total_count})")
 
         # Format results
         issues = [
@@ -379,13 +385,13 @@ async def get_linked_issues(request: LinkedIssuesRequest):
         }
 
     try:
-        # Get the issue with its links
-        issue = jira.get_issue(issue_key)
+        # Get raw issue data with links using the underlying Jira client
+        raw_issue = jira.jira.get_issue(issue_key)
 
         # Extract linked issue keys from the raw issue data
         linked_keys: list[str] = []
-        raw_issue = issue._raw if hasattr(issue, '_raw') else {}
         issuelinks = raw_issue.get('fields', {}).get('issuelinks', [])
+        logger.info(f"Found {len(issuelinks)} issue links for {issue_key}")
 
         for link in issuelinks:
             # Links can be inward or outward

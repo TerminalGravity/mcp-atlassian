@@ -24,16 +24,21 @@ type ModelId = keyof typeof MODELS
 // Tool to search vector store
 async function searchVectorStore(query: string, limit: number = 10) {
   try {
+    console.log(`[Vector Search] Query: "${query}", limit: ${limit}`)
     const response = await fetch(`${BACKEND_URL}/api/vector-search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, limit }),
     })
     if (!response.ok) {
+      console.error(`[Vector Search] Failed with status ${response.status}`)
       return { error: `Search failed with status ${response.status}`, issues: [], count: 0 }
     }
-    return response.json()
+    const result = await response.json()
+    console.log(`[Vector Search] Found ${result.issues?.length || 0} results`)
+    return result
   } catch (error) {
+    console.error(`[Vector Search] Error:`, error)
     return { error: `Search error: ${error}`, issues: [], count: 0 }
   }
 }
@@ -41,12 +46,14 @@ async function searchVectorStore(query: string, limit: number = 10) {
 // Tool to search via JQL
 async function searchJQL(jql: string, limit: number = 10) {
   try {
+    console.log(`[JQL Search] Query: "${jql}", limit: ${limit}`)
     const response = await fetch(`${BACKEND_URL}/api/jql-search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jql, limit }),
     })
     if (!response.ok) {
+      console.error(`[JQL Search] Failed with status ${response.status}`)
       return {
         error: "JQL search unavailable - Jira connection not configured",
         issues: [],
@@ -54,8 +61,11 @@ async function searchJQL(jql: string, limit: number = 10) {
         suggestion: "Use semantic_search instead for now"
       }
     }
-    return response.json()
+    const result = await response.json()
+    console.log(`[JQL Search] Found ${result.issues?.length || 0} results, error: ${result.error || 'none'}`)
+    return result
   } catch (error) {
+    console.error(`[JQL Search] Error:`, error)
     return {
       error: `JQL search error: ${error}`,
       issues: [],
@@ -128,9 +138,11 @@ When queries mention "my issues", "assigned to me", or use currentUser(), use th
 - Instead of \`assignee = currentUser()\`, use \`assignee = "${currentUser}"\`
 
 ## Tools Available
-1. **semantic_search** - Natural language search across 400K+ indexed issues. ALWAYS WORKS.
+1. **semantic_search** - Natural language search across indexed issues. ALWAYS WORKS.
 2. **jql_search** - Direct Jira queries using JQL syntax. May return errors if Jira not connected.
 3. **get_epic_children** - Get all child issues under an epic. USE THIS when you find an epic.
+   - IMPORTANT: Always pass both epicKey AND epicSummary for best results
+   - Example: get_epic_children({ epicKey: "DS-11641", epicSummary: "Launch of the Changemaker Platform" })
 4. **get_linked_issues** - Get issues linked to a specific issue.
 
 ## RESEARCH BEHAVIOR - CRITICAL
@@ -240,11 +252,35 @@ export async function POST(request: Request) {
             description: "Get all child issues (stories, tasks, bugs) under an epic. ALWAYS use this when you find an epic to understand its full scope.",
             inputSchema: z.object({
               epicKey: z.string().describe("Epic issue key like DS-11641"),
+              epicSummary: z.string().optional().describe("Epic summary text to search related issues by keyword"),
             }),
-            execute: async ({ epicKey }) => {
-              // Use JQL to find epic children
-              const jql = `"Epic Link" = ${epicKey} ORDER BY issuetype, status`
-              return await searchJQL(jql, 50)
+            execute: async ({ epicKey, epicSummary }) => {
+              // Try parent field first (newer Jira)
+              let result = await searchJQL(`parent = ${epicKey} ORDER BY issuetype, status`, 50)
+
+              // If parent returns few results, try Epic Link custom field
+              if ((result.issues?.length || 0) < 3 && !result.error) {
+                const epicLinkResult = await searchJQL(`"Epic Link" = ${epicKey} ORDER BY issuetype, status`, 50)
+                if ((epicLinkResult.issues?.length || 0) > (result.issues?.length || 0)) {
+                  result = epicLinkResult
+                }
+              }
+
+              // If still few results and we have epic summary, search by keyword
+              if ((result.issues?.length || 0) < 3 && epicSummary) {
+                // Extract main keyword from epic summary (first significant word)
+                const keyword = epicSummary.split(/[\s\-–:]+/).find(w => w.length > 4) || epicSummary.split(' ')[0]
+                if (keyword) {
+                  const keywordResult = await searchJQL(
+                    `project = DS AND summary ~ "${keyword}" AND key != ${epicKey} ORDER BY updated DESC`,
+                    30
+                  )
+                  if ((keywordResult.issues?.length || 0) > (result.issues?.length || 0)) {
+                    result = { ...keywordResult, note: `Found via keyword search for "${keyword}"` }
+                  }
+                }
+              }
+              return result
             },
           }),
 
