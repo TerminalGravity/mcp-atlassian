@@ -2538,3 +2538,420 @@ async def jira_integration_knowledge(
             "error": str(e),
             "integration": integration,
         }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "faq", "ai"},
+    annotations={"title": "Generate FAQ", "readOnlyHint": True},
+)
+async def jira_generate_faq(
+    ctx: Context,
+    topic: Annotated[
+        str,
+        Field(
+            description=(
+                "Topic to generate FAQ for. "
+                "Examples: 'card activation', 'refunds', 'login issues', "
+                "'payment failures'"
+            )
+        ),
+    ],
+    projects: Annotated[
+        str,
+        Field(
+            description="Projects to search for FAQ content (e.g., 'CS,SUP')",
+            default="CS",
+        ),
+    ] = "CS",
+    max_faq_items: Annotated[
+        int,
+        Field(
+            description="Maximum FAQ items to generate (1-10)",
+            ge=1,
+            le=10,
+            default=5,
+        ),
+    ] = 5,
+    include_sources: Annotated[
+        bool,
+        Field(
+            description="Include source issue keys in response",
+            default=True,
+        ),
+    ] = True,
+) -> str:
+    """
+    Generate FAQ entries from support tickets using AI synthesis.
+
+    Searches for resolved issues related to a topic and uses AI to
+    synthesize common questions and answers. Useful for:
+    - Building knowledge base content from ticket history
+    - Identifying common customer questions
+    - Creating self-service documentation
+
+    All generated content includes source citations.
+
+    Args:
+        ctx: The FastMCP context.
+        topic: Topic to generate FAQ for.
+        projects: Projects to search.
+        max_faq_items: Maximum FAQ entries to generate.
+        include_sources: Include source issue keys.
+
+    Returns:
+        JSON string with generated FAQ entries and source citations.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+
+        # Check for OpenAI client
+        client = _get_openai_client()
+        if not client:
+            return json.dumps({
+                "error": "OpenAI API key not configured",
+                "hint": "Set OPENAI_API_KEY environment variable",
+            }, indent=2)
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "No issues indexed yet",
+                "hint": "Run sync first",
+            }, indent=2)
+
+        # Generate query embedding
+        query_vector = await embedder.embed(f"{topic} problem question issue")
+
+        # Build filters - focus on resolved issues
+        project_list = [p.strip().upper() for p in projects.split(",")]
+        filters: dict[str, Any] = {
+            "status_category": "Done",
+        }
+        if len(project_list) == 1:
+            filters["project_key"] = project_list[0]
+        else:
+            filters["project_key"] = {"$in": project_list}
+
+        # Search for related resolved issues
+        results, total_count = store.search_issues(
+            query_vector=query_vector,
+            limit=max_faq_items * 3,  # Get more to have good source material
+            filters=filters,
+            min_score=0.35,
+        )
+
+        if len(results) < 3:
+            return json.dumps({
+                "topic": topic,
+                "error": "Not enough resolved issues found for this topic",
+                "issues_found": len(results),
+                "hint": "Try a broader topic or different projects",
+            }, indent=2)
+
+        # Prepare issue summaries for AI
+        issue_summaries = []
+        for r in results[:15]:  # Limit context size
+            summary = f"- {r['issue_id']}: {r['summary']}"
+            if r.get("description_preview"):
+                summary += f" - {r['description_preview'][:100]}"
+            issue_summaries.append(summary)
+
+        # Generate FAQ using AI
+        system_prompt = """You are a technical writer creating FAQ content from support tickets.
+
+Given a list of resolved support tickets about a topic, generate clear FAQ entries.
+
+Rules:
+1. Each FAQ should have a clear question and concise answer
+2. Base answers ONLY on information in the provided tickets
+3. If tickets show different solutions, mention the most common approach
+4. Keep answers practical and actionable
+5. Use professional, helpful tone
+
+Output format (JSON array):
+[
+  {
+    "question": "Why is my card not working?",
+    "answer": "Cards typically need 24-48 hours to activate after ordering. If still not working, check that the card is properly activated in your account settings.",
+    "confidence": "high"
+  }
+]
+
+confidence levels: "high" (5+ similar tickets), "medium" (3-4 tickets), "low" (1-2 tickets)"""
+
+        user_prompt = f"""Topic: {topic}
+
+Related resolved support tickets:
+{chr(10).join(issue_summaries)}
+
+Generate {max_faq_items} FAQ entries based on these tickets. Return ONLY valid JSON array."""
+
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=1500,
+            )
+
+            faq_text = response.choices[0].message.content or "[]"
+
+            # Parse the generated FAQ
+            import re
+            # Extract JSON array from response
+            json_match = re.search(r'\[[\s\S]*\]', faq_text)
+            if json_match:
+                faq_items = json.loads(json_match.group())
+            else:
+                faq_items = []
+
+        except Exception as e:
+            logger.error(f"OpenAI FAQ generation error: {e}")
+            return json.dumps({
+                "error": f"AI generation failed: {e}",
+                "topic": topic,
+            }, indent=2)
+
+        # Build response with sources
+        result = {
+            "topic": topic,
+            "projects_searched": project_list,
+            "source_tickets_analyzed": len(results),
+            "faq_items": faq_items,
+        }
+
+        if include_sources:
+            result["source_issues"] = [
+                {"key": r["issue_id"], "summary": r["summary"][:80]}
+                for r in results[:10]
+            ]
+
+        result["disclaimer"] = "Generated from historical tickets. Verify accuracy before publishing."
+
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"FAQ generation error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "topic": topic,
+        }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "analytics"},
+    annotations={"title": "Top Support Questions", "readOnlyHint": True},
+)
+async def jira_top_questions(
+    ctx: Context,
+    projects: Annotated[
+        str,
+        Field(
+            description="Projects to analyze (e.g., 'CS,SUP')",
+            default="CS",
+        ),
+    ] = "CS",
+    time_period: Annotated[
+        str,
+        Field(
+            description="Time period: 'week', 'month', 'quarter', 'year', 'all'",
+            default="month",
+        ),
+    ] = "month",
+    limit: Annotated[
+        int,
+        Field(
+            description="Number of top topics to return (1-20)",
+            ge=1,
+            le=20,
+            default=10,
+        ),
+    ] = 10,
+) -> str:
+    """
+    Identify the most common support topics from issue patterns.
+
+    Analyzes issue summaries to find recurring themes and question
+    patterns. Useful for:
+    - Prioritizing FAQ content creation
+    - Identifying training opportunities
+    - Understanding support volume by topic
+
+    Args:
+        ctx: The FastMCP context.
+        projects: Projects to analyze.
+        time_period: Time period to analyze.
+        limit: Number of top topics to return.
+
+    Returns:
+        JSON string with top support topics and their frequency.
+    """
+    try:
+        store = _get_store()
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "No issues indexed yet",
+            }, indent=2)
+
+        # Build time filter
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        time_filters = {
+            "week": now - timedelta(days=7),
+            "month": now - timedelta(days=30),
+            "quarter": now - timedelta(days=90),
+            "year": now - timedelta(days=365),
+            "all": None,
+        }
+
+        start_date = time_filters.get(time_period)
+
+        # Parse projects
+        project_list = [p.strip().upper() for p in projects.split(",")]
+
+        # Build filter
+        filters: dict[str, Any] = {}
+        if len(project_list) == 1:
+            filters["project_key"] = project_list[0]
+        else:
+            filters["project_key"] = {"$in": project_list}
+
+        if start_date:
+            filters["created_at"] = {"$gte": start_date.isoformat()}
+
+        # Get issues and analyze summaries
+        # Use a simple keyword frequency approach
+        try:
+            # Query the table directly for summaries
+            table = store.issues_table
+
+            # Build where clause
+            where_parts = []
+            for project in project_list:
+                where_parts.append(f"project_key = '{project}'")
+            where_clause = " OR ".join(where_parts)
+
+            if start_date:
+                where_clause = f"({where_clause}) AND created_at >= '{start_date.isoformat()}'"
+
+            # Get summaries
+            results = (
+                table.search()
+                .where(where_clause, prefilter=True)
+                .select(["issue_id", "summary", "issue_type"])
+                .limit(1000)
+                .to_list()
+            )
+
+            if not results:
+                return json.dumps({
+                    "error": "No issues found for the specified filters",
+                    "projects": project_list,
+                    "time_period": time_period,
+                }, indent=2)
+
+            # Extract common themes from summaries
+            # Simple approach: count common words/phrases
+            from collections import Counter
+            import re
+
+            # Common words to exclude
+            stop_words = {
+                'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+                'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+                'would', 'could', 'should', 'may', 'might', 'must', 'shall',
+                'can', 'need', 'to', 'of', 'in', 'for', 'on', 'with', 'at',
+                'by', 'from', 'as', 'into', 'through', 'during', 'before',
+                'after', 'above', 'below', 'between', 'under', 'again',
+                'further', 'then', 'once', 'here', 'there', 'when', 'where',
+                'why', 'how', 'all', 'each', 'few', 'more', 'most', 'other',
+                'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same',
+                'so', 'than', 'too', 'very', 'just', 'and', 'but', 'if', 'or',
+                'because', 'until', 'while', 'this', 'that', 'these', 'those',
+                'i', 'me', 'my', 'we', 'our', 'you', 'your', 'it', 'its',
+            }
+
+            # Extract meaningful phrases
+            phrase_counter: Counter = Counter()
+            word_counter: Counter = Counter()
+
+            for r in results:
+                summary = r.get("summary", "").lower()
+                # Clean and tokenize
+                words = re.findall(r'\b[a-z]{3,}\b', summary)
+                meaningful_words = [w for w in words if w not in stop_words]
+
+                # Count individual words
+                word_counter.update(meaningful_words)
+
+                # Count 2-word phrases
+                for i in range(len(meaningful_words) - 1):
+                    phrase = f"{meaningful_words[i]} {meaningful_words[i+1]}"
+                    phrase_counter[phrase] += 1
+
+            # Combine and rank topics
+            top_phrases = phrase_counter.most_common(limit)
+            top_words = word_counter.most_common(limit)
+
+            # Build response
+            topics = []
+            seen = set()
+
+            # Prioritize phrases over single words
+            for phrase, count in top_phrases:
+                if count >= 2 and phrase not in seen:
+                    topics.append({
+                        "topic": phrase,
+                        "frequency": count,
+                        "type": "phrase",
+                    })
+                    seen.add(phrase)
+                    # Also mark component words as seen
+                    for word in phrase.split():
+                        seen.add(word)
+
+            # Add top single words not already covered
+            for word, count in top_words:
+                if len(topics) >= limit:
+                    break
+                if word not in seen and count >= 3:
+                    topics.append({
+                        "topic": word,
+                        "frequency": count,
+                        "type": "keyword",
+                    })
+                    seen.add(word)
+
+            # Sort by frequency
+            topics.sort(key=lambda x: x["frequency"], reverse=True)
+            topics = topics[:limit]
+
+            response = {
+                "projects": project_list,
+                "time_period": time_period,
+                "issues_analyzed": len(results),
+                "top_topics": topics,
+                "hint": "Use jira_generate_faq with these topics to create FAQ content",
+            }
+
+            return json.dumps(response, indent=2, ensure_ascii=False)
+
+        except Exception as e:
+            logger.error(f"Topic analysis error: {e}")
+            return json.dumps({
+                "error": f"Analysis failed: {e}",
+            }, indent=2)
+
+    except Exception as e:
+        logger.error(f"Top questions error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+        }, indent=2)
