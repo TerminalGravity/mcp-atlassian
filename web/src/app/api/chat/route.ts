@@ -43,6 +43,28 @@ interface RefinementsData {
   refinements: Refinement[]
 }
 
+// Maximum number of refinement chips to show for clean UX
+const MAX_REFINEMENT_CHIPS = 8
+
+// Pluralize issue type labels correctly
+function pluralizeIssueType(type: string): string {
+  const irregulars: Record<string, string> = {
+    'Story': 'Stories',
+    'story': 'stories',
+    'Bug': 'Bugs',
+    'bug': 'bugs',
+    'Task': 'Tasks',
+    'task': 'tasks',
+    'Epic': 'Epics',
+    'epic': 'epics',
+    'Sub-task': 'Sub-tasks',
+    'sub-task': 'sub-tasks',
+    'Quote': 'Quotes',
+    'quote': 'quotes',
+  }
+  return irregulars[type] || `${type}s`
+}
+
 // Generate search refinements from tool output issues
 function generateSearchRefinements(issues: JiraIssue[], originalQuery: string): RefinementsData | null {
   // Don't generate refinements for small result sets
@@ -120,7 +142,7 @@ function generateSearchRefinements(issues: JiraIssue[], originalQuery: string): 
       if (count >= 2) {
         refinements.push({
           id: `type-${type.toLowerCase().replace(/\s+/g, '-')}`,
-          label: `${type}s (${count})`,
+          label: `${pluralizeIssueType(type)} (${count})`,
           category: 'type',
           filter: {
             field: 'issue_type',
@@ -190,10 +212,13 @@ function generateSearchRefinements(issues: JiraIssue[], originalQuery: string): 
   // Sort refinements by count (highest first) within each category
   refinements.sort((a, b) => (b.count || 0) - (a.count || 0))
 
+  // Limit to MAX_REFINEMENT_CHIPS for clean UX
+  const limitedRefinements = refinements.slice(0, MAX_REFINEMENT_CHIPS)
+
   return {
     originalQuery,
     totalResults: issues.length,
-    refinements
+    refinements: limitedRefinements
   }
 }
 

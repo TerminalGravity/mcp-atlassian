@@ -1,5 +1,6 @@
 "use client"
 
+import { useCallback } from "react"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Avatar } from "@/components/ui/avatar"
@@ -234,23 +235,26 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
     .filter((issue, index, self) => self.findIndex(i => i.issue_id === issue.issue_id) === index)
 
   // Handler for refinement selection - constructs a filtered query
-  const handleRefinementSelect = (refinement: Refinement, originalQuery: string) => {
-    if (!onSendMessage) return
+  const handleRefinementSelect = useCallback(
+    (refinement: Refinement, originalQuery: string) => {
+      if (!onSendMessage) return
 
-    // Build a descriptive query that includes the filter context
-    const filterDescriptions: Record<string, string> = {
-      project: `in ${refinement.filter.value} project`,
-      time: `from ${refinement.label.toLowerCase()}`,
-      type: `of type ${refinement.filter.value}`,
-      priority: `with ${refinement.filter.value} priority`,
-      status: `with status ${refinement.filter.value}`,
-    }
+      // Build a descriptive query that includes the filter context
+      const filterDescriptions: Record<string, string> = {
+        project: `in ${refinement.filter.value} project`,
+        time: `from ${refinement.label.toLowerCase()}`,
+        type: `of type ${refinement.filter.value}`,
+        priority: `with ${refinement.filter.value} priority`,
+        status: `with status ${refinement.filter.value}`,
+      }
 
-    const filterContext = filterDescriptions[refinement.category] || refinement.label
-    const newQuery = `Show me results ${filterContext}: ${originalQuery}`
+      const filterContext = filterDescriptions[refinement.category] || refinement.label
+      const newQuery = `Show me results ${filterContext}: ${originalQuery}`
 
-    onSendMessage(newQuery)
-  }
+      onSendMessage(newQuery)
+    },
+    [onSendMessage]
+  )
 
   return (
     <motion.div
