@@ -92,37 +92,90 @@ async function getLinkedIssues(issueKey: string) {
   }
 }
 
-// Generate contextual follow-up suggestions
+// Generate contextual follow-up suggestions based on response content
 function generateFollowUpSuggestions(responseText: string, lastUserMessage: string): string[] {
   const suggestions: string[] = []
 
-  // Detect context from response
-  const hasEpic = /epic/i.test(responseText) || /DS-\d+.*Epic/i.test(responseText)
-  const hasBugs = /bug/i.test(responseText)
-  const hasProject = /changemaker|rewardstack|marketplace/i.test(responseText)
-  const hasAssignee = /assigned to|assignee/i.test(responseText)
+  // Extract specific issue keys mentioned (prioritize those called out specifically)
+  const issueMatches = responseText.match(/DS-\d+/g) || []
+  const uniqueIssues = [...new Set(issueMatches)].slice(0, 5)
 
-  // Context-aware suggestions
-  if (hasEpic || hasProject) {
-    suggestions.push("Who's currently working on this?")
-    suggestions.push("What's the current progress?")
+  // Extract key topics/features mentioned
+  const topicPatterns = [
+    { pattern: /QA|testing|test/i, topic: "QA" },
+    { pattern: /permission|catalog|workspace/i, topic: "permissions" },
+    { pattern: /MVP|demo|release/i, topic: "MVP" },
+    { pattern: /phase\s*2|backlog/i, topic: "Phase 2" },
+    { pattern: /blocker|blocked|blocking/i, topic: "blockers" },
+    { pattern: /performance|N\+1|pagination/i, topic: "performance" },
+  ]
+
+  const detectedTopics = topicPatterns
+    .filter(({ pattern }) => pattern.test(responseText))
+    .map(({ topic }) => topic)
+
+  // Extract assignee names mentioned
+  const assigneeMatch = responseText.match(/(?:assigned to|Assignee[:\s]+)([A-Z][a-z]+ [A-Z][a-z]+)/gi)
+  const assignees = assigneeMatch
+    ? [...new Set(assigneeMatch.map(m => m.replace(/assigned to|assignee[:\s]+/i, '').trim()))]
+    : []
+
+  // Generate specific suggestions based on extracted context
+
+  // If specific issues were highlighted, offer to drill into them
+  if (uniqueIssues.length > 0) {
+    const highlightedIssue = uniqueIssues.find(i =>
+      responseText.includes(`**${i}**`) || responseText.includes(`[${i}]`)
+    ) || uniqueIssues[0]
+    suggestions.push(`Tell me more about ${highlightedIssue}`)
   }
 
-  if (hasBugs) {
-    suggestions.push("Show me the open bugs")
-    suggestions.push("What's blocking resolution?")
+  // Topic-specific suggestions
+  if (detectedTopics.includes("QA")) {
+    suggestions.push("What QA items are still open?")
+  }
+  if (detectedTopics.includes("blockers")) {
+    suggestions.push("List all current blockers")
+  }
+  if (detectedTopics.includes("MVP") && !detectedTopics.includes("blockers")) {
+    suggestions.push("What's blocking the MVP?")
+  }
+  if (detectedTopics.includes("Phase 2")) {
+    suggestions.push("What's planned for Phase 2?")
+  }
+  if (detectedTopics.includes("performance")) {
+    suggestions.push("Show performance-related issues")
   }
 
-  if (hasAssignee) {
-    suggestions.push("Show their other open issues")
+  // Assignee-specific suggestions
+  if (assignees.length > 0) {
+    const firstName = assignees[0].split(' ')[0]
+    suggestions.push(`What else is ${firstName} working on?`)
   }
 
-  // Add generic useful suggestions
-  if (suggestions.length < 3) {
-    suggestions.push("Show me recent activity")
+  // Status-based suggestions if we talked about in-progress work
+  if (/in progress|development in progress/i.test(responseText)) {
+    suggestions.push("Show only open items")
   }
-  if (suggestions.length < 4) {
-    suggestions.push("What are the blockers?")
+
+  // If response mentioned multiple epics, offer comparison
+  const epicCount = (responseText.match(/epic/gi) || []).length
+  if (epicCount > 1) {
+    suggestions.push("Compare the epics")
+  }
+
+  // Fallback suggestions if we don't have enough
+  const fallbacks = [
+    "Show recent activity",
+    "What needs attention?",
+    "Summarize the status",
+  ]
+
+  while (suggestions.length < 4 && fallbacks.length > 0) {
+    const fallback = fallbacks.shift()!
+    if (!suggestions.includes(fallback)) {
+      suggestions.push(fallback)
+    }
   }
 
   return suggestions.slice(0, 4)
