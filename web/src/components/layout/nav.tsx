@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { UserSelector } from "./user-selector"
+import { ThemeToggle } from "./theme-toggle"
 import { Badge } from "@/components/ui/badge"
 
 const NAV_LINKS = [
@@ -52,8 +53,11 @@ export function Nav() {
           </div>
         </div>
 
-        {/* User Selector */}
-        <UserSelector />
+        {/* Right side controls */}
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <UserSelector />
+        </div>
       </div>
     </nav>
   )
