@@ -243,6 +243,27 @@ See [AGENTS.md](AGENTS.md) for detailed development guidelines.
 
 ---
 
+## Production Deployment
+
+For deploying to production, we recommend:
+
+| Component | Platform | Cost |
+|-----------|----------|------|
+| Web UI (Next.js) | Vercel | Free |
+| Backend API (FastAPI + LanceDB) | Fly.io or Railway | ~$5-10/mo |
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Vercel        │────▶│   Fly.io        │────▶│   Jira Cloud    │
+│   (Next.js)     │     │   (FastAPI)     │     │   + OpenAI      │
+│   FREE          │     │   $5-10/mo      │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+See [Issue #10](https://github.com/TerminalGravity/mcp-atlassian/issues/10) for detailed deployment planning.
+
+---
+
 ## Upstream
 
 This fork is based on [sooperset/mcp-atlassian](https://github.com/sooperset/mcp-atlassian). Full upstream documentation is available at [personal-1d37018d.mintlify.app](https://personal-1d37018d.mintlify.app).
