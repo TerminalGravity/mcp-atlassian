@@ -35,20 +35,40 @@ function getStore(): ConversationStore {
     if (!stored) return {}
     const parsed = JSON.parse(stored)
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      console.warn("[conversation-storage] Invalid store format, resetting")
       return {}
     }
     return parsed as ConversationStore
-  } catch {
+  } catch (error) {
+    console.error("[conversation-storage] Failed to read from localStorage:", error)
     return {}
   }
 }
 
-function setStore(store: ConversationStore): void {
-  if (isSSR()) return
+// Storage error state - can be checked by UI
+let lastStorageError: string | null = null
+
+export function getLastStorageError(): string | null {
+  return lastStorageError
+}
+
+export function clearStorageError(): void {
+  lastStorageError = null
+}
+
+function setStore(store: ConversationStore): boolean {
+  if (isSSR()) return true
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+    lastStorageError = null
+    return true
   } catch (e) {
-    console.warn("Failed to save conversations:", e)
+    const isQuotaError = e instanceof DOMException && e.name === "QuotaExceededError"
+    lastStorageError = isQuotaError
+      ? "Storage is full. Please delete some conversations."
+      : "Failed to save conversation."
+    console.error("[conversation-storage] Save failed:", e)
+    return false
   }
 }
 
@@ -200,8 +220,8 @@ export function migrateFromOldStorage(): void {
     // Still try to remove the old key to prevent repeated migration attempts
     try {
       localStorage.removeItem(OLD_STORAGE_KEY)
-    } catch {
-      // Ignore
+    } catch (cleanupError) {
+      console.warn("[conversation-storage] Failed to remove old storage key:", cleanupError)
     }
   }
 }

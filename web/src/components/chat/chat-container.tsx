@@ -10,7 +10,7 @@ import { ChatMessage } from "./chat-message"
 import { ChatInput } from "./chat-input"
 import { StarterPrompts } from "./starter-prompts"
 import { ConversationSidebar } from "./conversation-sidebar"
-import { Loader2, ChevronDown, PanelLeftClose, PanelLeft } from "lucide-react"
+import { Loader2, ChevronDown, PanelLeftClose, PanelLeft, AlertCircle, X } from "lucide-react"
 import { useUser } from "@/contexts/user-context"
 import {
   getAllConversationMetas,
@@ -49,9 +49,20 @@ export function ChatContainer() {
     api: "/api/chat",
   }), [])
 
-  const { messages, status, sendMessage, setMessages, stop } = useChat({
+  const { messages, status, sendMessage, setMessages, stop, error } = useChat({
     transport,
   })
+
+  // Local error state for UI display
+  const [chatError, setChatError] = useState<string | null>(null)
+
+  // Watch for useChat errors
+  useEffect(() => {
+    if (error) {
+      console.error("[chat] Error:", error)
+      setChatError(error.message || "Failed to get response. Please try again.")
+    }
+  }, [error])
 
   // Initialize: migrate old storage and load conversations
   useEffect(() => {
@@ -207,11 +218,13 @@ export function ChatContainer() {
 
   const onSend = (content: string) => {
     setShowStarters(false)
+    setChatError(null) // Clear any previous error
     sendMessage({ text: content }, { body: { model: selectedModel, currentUser: currentUser.id } })
   }
 
   const handleStarterSelect = (prompt: string) => {
     setShowStarters(false)
+    setChatError(null) // Clear any previous error
     sendMessage({ text: prompt }, { body: { model: selectedModel, currentUser: currentUser.id } })
   }
 
@@ -301,8 +314,8 @@ export function ChatContainer() {
             </AnimatePresence>
 
             {/* Chat Messages */}
-            {messages.map((message) => (
-              <ChatMessage key={message.id} message={message} onSendMessage={onSend} />
+            {messages.map((message, index) => (
+              <ChatMessage key={`${message.id}-${index}`} message={message} onSendMessage={onSend} />
             ))}
 
             {/* Loading indicator */}
@@ -326,6 +339,32 @@ export function ChatContainer() {
                       Searching Jira knowledge base...
                     </motion.div>
                   </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Error display */}
+            <AnimatePresence>
+              {chatError && !isLoading && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="flex items-start gap-3 py-4 px-4 rounded-lg bg-destructive/10 border border-destructive/20"
+                >
+                  <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-destructive font-medium">Something went wrong</p>
+                    <p className="text-xs text-destructive/80 mt-1">{chatError}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setChatError(null)}
+                    className="h-6 w-6 p-0 text-destructive/60 hover:text-destructive"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
                 </motion.div>
               )}
             </AnimatePresence>
