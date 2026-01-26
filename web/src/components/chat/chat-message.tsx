@@ -6,9 +6,10 @@ import { Avatar } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { UIMessage } from "ai"
-import { Bot, User, ExternalLink, Search, Database, ChevronDown, ChevronUp } from "lucide-react"
+import { Bot, User, ExternalLink, Search, Database, ChevronDown, ChevronUp, AlertCircle } from "lucide-react"
 import { useState } from "react"
 import { IssueStats } from "./issue-stats"
+import { Streamdown } from "streamdown"
 
 interface ChatMessageProps {
   message: UIMessage
@@ -77,13 +78,14 @@ function SourceCard({ source, index }: { source: JiraIssue; index: number }) {
 function ToolInvocation({ toolName, input, output, state, index }: {
   toolName: string
   input?: { query?: string; jql?: string; limit?: number }
-  output?: { issues?: JiraIssue[]; count?: number }
+  output?: { issues?: JiraIssue[]; count?: number; error?: string; suggestion?: string }
   state?: string
   index: number
 }) {
   const [expanded, setExpanded] = useState(true)
   const isComplete = state === "output-available" && output !== undefined
   const issues = output?.issues || []
+  const hasError = !!output?.error
   const hasMany = issues.length > 4
 
   // Extract query/jql from input
@@ -119,10 +121,16 @@ function ToolInvocation({ toolName, input, output, state, index }: {
         </span>
         {isComplete && (
           <>
-            <Badge variant="secondary" className="text-xs">
-              {issues.length} results
-            </Badge>
-            {hasMany && (
+            {hasError ? (
+              <Badge variant="destructive" className="text-xs">
+                Error
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="text-xs">
+                {issues.length} results
+              </Badge>
+            )}
+            {(hasMany || hasError) && (
               expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />
             )}
           </>
@@ -130,33 +138,48 @@ function ToolInvocation({ toolName, input, output, state, index }: {
       </button>
 
       <AnimatePresence>
-        {isComplete && expanded && issues.length > 0 && (
+        {isComplete && expanded && (hasError || issues.length > 0) && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             className="border-t bg-background"
           >
+            {/* Error state */}
+            {hasError && (
+              <div className="px-4 py-3 flex items-start gap-3 bg-destructive/5">
+                <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-destructive">{output?.error}</p>
+                  {output?.suggestion && (
+                    <p className="text-xs text-muted-foreground mt-1">{output.suggestion}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Stats visualization */}
-            {issues.length >= 3 && (
+            {!hasError && issues.length >= 3 && (
               <div className="px-4 pt-4">
                 <IssueStats issues={issues} />
               </div>
             )}
 
             {/* Issue cards */}
-            <div className="px-4 py-3">
-              <div className="grid gap-2 sm:grid-cols-2">
-                {issues.slice(0, expanded ? 6 : 4).map((issue, i) => (
-                  <SourceCard key={issue.issue_id} source={issue} index={i} />
-                ))}
+            {!hasError && issues.length > 0 && (
+              <div className="px-4 py-3">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {issues.slice(0, expanded ? 6 : 4).map((issue, i) => (
+                    <SourceCard key={issue.issue_id} source={issue} index={i} />
+                  ))}
+                </div>
+                {issues.length > 6 && (
+                  <p className="text-xs text-muted-foreground mt-3 text-center">
+                    +{issues.length - 6} more results
+                  </p>
+                )}
               </div>
-              {issues.length > 6 && (
-                <p className="text-xs text-muted-foreground mt-3 text-center">
-                  +{issues.length - 6} more results
-                </p>
-              )}
-            </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -223,7 +246,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
               isUser && "text-right"
             )}
           >
-            <p className="whitespace-pre-wrap leading-relaxed">{textContent}</p>
+            {isUser ? (
+              <p className="whitespace-pre-wrap leading-relaxed">{textContent}</p>
+            ) : (
+              <Streamdown>{textContent}</Streamdown>
+            )}
           </motion.div>
         )}
       </div>
