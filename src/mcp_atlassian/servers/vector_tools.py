@@ -2285,3 +2285,256 @@ async def jira_project_feature_matrix(
             "error": str(e),
             "features": features,
         }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "vendor"},
+    annotations={"title": "Vendor Capabilities", "readOnlyHint": True},
+)
+async def jira_vendor_capabilities(
+    ctx: Context,
+    capability: Annotated[
+        str,
+        Field(
+            description=(
+                "Capability or feature to find vendors for. "
+                "Examples: 'real-time balance', 'virtual cards', "
+                "'international transactions', 'fraud detection'"
+            )
+        ),
+    ],
+    vendor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional: Filter to specific vendor name. "
+                "Examples: 'blackhawk', 'incomm', 'perfect plastic'"
+            ),
+            default=None,
+        ),
+    ] = None,
+    projects: Annotated[
+        str,
+        Field(
+            description="Projects to search (default: 'SUP,PP' for supplier-related)",
+            default="SUP,PP",
+        ),
+    ] = "SUP,PP",
+    limit: Annotated[
+        int,
+        Field(
+            description="Maximum results (1-20)",
+            ge=1,
+            le=20,
+            default=10,
+        ),
+    ] = 10,
+) -> str:
+    """
+    Find vendor-related issues for a specific capability.
+
+    Searches supplier and prepaid projects for issues related to
+    vendor capabilities and integrations. Useful for:
+    - Discovering which vendors support specific features
+    - Finding integration patterns and documentation
+    - Researching vendor-specific implementations
+
+    Args:
+        ctx: The FastMCP context.
+        capability: Capability or feature to search for.
+        vendor: Optional vendor name to filter by.
+        projects: Projects to search (default: SUP,PP).
+        limit: Maximum number of results.
+
+    Returns:
+        JSON string with vendor-related issues grouped by relevance.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+
+        # Build query combining capability and vendor if specified
+        if vendor:
+            query = f"{vendor} {capability}"
+        else:
+            query = capability
+
+        # Generate query embedding
+        query_vector = await embedder.embed(query)
+
+        # Parse projects
+        project_list = [p.strip().upper() for p in projects.split(",")]
+
+        # Build filters
+        filters: dict[str, Any] = {}
+        if len(project_list) == 1:
+            filters["project_key"] = project_list[0]
+        else:
+            filters["project_key"] = {"$in": project_list}
+
+        # Search for related issues
+        results, total_count = store.search_issues(
+            query_vector=query_vector,
+            limit=limit,
+            filters=filters,
+            min_score=0.3,
+        )
+
+        # Format response
+        vendor_results = []
+        for r in results:
+            vendor_results.append({
+                "key": r["issue_id"],
+                "summary": r["summary"][:150],
+                "type": r["issue_type"],
+                "status": r["status"],
+                "project": r["project_key"],
+                "labels": r.get("labels", [])[:5],
+                "score": round(r.get("score", 0), 3),
+            })
+
+        response = {
+            "capability": capability,
+            "vendor_filter": vendor,
+            "projects_searched": project_list,
+            "total_matches": total_count,
+            "results": vendor_results,
+            "hint": "Use jira_get_issue with issue key for full details",
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        logger.error(f"Vendor capabilities error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "capability": capability,
+        }, indent=2)
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "vendor", "docs"},
+    annotations={"title": "Integration Knowledge", "readOnlyHint": True},
+)
+async def jira_integration_knowledge(
+    ctx: Context,
+    integration: Annotated[
+        str,
+        Field(
+            description=(
+                "Integration or vendor to find documentation for. "
+                "Examples: 'blackhawk', 'stripe', 'paypal', 'incomm'"
+            )
+        ),
+    ],
+    include_comments: Annotated[
+        bool,
+        Field(
+            description="Include relevant comments for implementation details",
+            default=True,
+        ),
+    ] = True,
+    limit: Annotated[
+        int,
+        Field(
+            description="Maximum issues to return (1-15)",
+            ge=1,
+            le=15,
+            default=10,
+        ),
+    ] = 10,
+) -> str:
+    """
+    Find integration knowledge and documentation from issue history.
+
+    Searches across all projects for issues related to a specific
+    integration or vendor, including implementation details from comments.
+    Useful for:
+    - Understanding how an integration was implemented
+    - Finding configuration details and gotchas
+    - Building integration documentation from historical knowledge
+
+    Args:
+        ctx: The FastMCP context.
+        integration: Integration or vendor name to search for.
+        include_comments: Include relevant comments for details.
+        limit: Maximum issues to return.
+
+    Returns:
+        JSON string with integration-related issues and comments.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "No issues indexed yet",
+                "hint": "Run sync first",
+            }, indent=2)
+
+        # Generate query embedding for integration name
+        query = f"{integration} integration implementation"
+        query_vector = await embedder.embed(query)
+
+        # Search across all projects (no filter)
+        results, total_count = store.search_issues(
+            query_vector=query_vector,
+            limit=limit,
+            min_score=0.35,
+        )
+
+        # Build integration knowledge
+        knowledge_items = []
+        for issue in results:
+            item = {
+                "key": issue["issue_id"],
+                "summary": issue["summary"],
+                "type": issue["issue_type"],
+                "status": issue["status"],
+                "project": issue["project_key"],
+                "score": round(issue.get("score", 0), 3),
+            }
+
+            # Include resolved date if available
+            if issue.get("resolved_at"):
+                item["resolved_at"] = str(issue["resolved_at"])
+
+            # Fetch comments if requested
+            if include_comments and stats["total_comments"] > 0:
+                try:
+                    comment_results = store.search_comments(
+                        query_vector=query_vector,
+                        limit=2,
+                        filters={"issue_key": issue["issue_id"]},
+                    )
+                    if comment_results:
+                        item["relevant_comments"] = [
+                            {
+                                "author": c["author"],
+                                "preview": c["body_preview"][:250],
+                            }
+                            for c in comment_results
+                        ]
+                except Exception as e:
+                    logger.debug(f"Could not fetch comments: {e}")
+
+            knowledge_items.append(item)
+
+        response = {
+            "integration": integration,
+            "total_matches": total_count,
+            "knowledge_base": knowledge_items,
+            "hint": "Use jira_get_issue for complete issue details",
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False, default=str)
+
+    except Exception as e:
+        logger.error(f"Integration knowledge error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "integration": integration,
+        }, indent=2)
