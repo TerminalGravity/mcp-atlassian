@@ -13,7 +13,9 @@ def test_from_env_defaults():
     """Test that from_env correctly loads default configuration."""
     with patch.dict(os.environ, {}, clear=True):
         config = VectorConfig.from_env()
-        assert config.db_path == Path("./data/lancedb")
+        # db_path is now absolute to ensure all services share the same store
+        assert config.db_path.is_absolute()
+        assert str(config.db_path).endswith("data/lancedb")
         assert config.embedding_provider == EmbeddingProvider.OPENAI
         assert config.embedding_model == "text-embedding-3-small"
         assert config.embedding_dimensions == 1536

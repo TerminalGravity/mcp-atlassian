@@ -218,9 +218,9 @@ class TestVectorSyncEngine:
         call_args = mock_jira.search_issues.call_args
         jql = call_args[1]["jql"]
         assert 'project = "PROJ"' in jql
-        # Full syncs now use updated >= 2022-01-01 ORDER BY updated DESC
+        # Full syncs use ORDER BY key DESC for stable pagination
         assert 'updated >= "2022-01-01"' in jql
-        assert "ORDER BY updated DESC" in jql
+        assert "ORDER BY key DESC" in jql
 
     def test_issue_to_dict(self, mock_jira, config):
         """Test converting JiraIssue to dictionary."""
