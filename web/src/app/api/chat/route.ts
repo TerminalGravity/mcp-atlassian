@@ -222,18 +222,20 @@ function generateSearchRefinements(issues: JiraIssue[], originalQuery: string): 
   }
 }
 
-// Extract issues from tool results (steps from AI SDK)
+// Extract issues from tool results (steps from AI SDK v6)
+// In v6, toolResults have 'output' instead of 'result'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractIssuesFromSteps(steps: any[]): JiraIssue[] {
   const allIssues: JiraIssue[] = []
 
   for (const step of steps) {
+    // AI SDK v6: step.toolResults is an array with 'output' property
     if (step.toolResults && Array.isArray(step.toolResults)) {
       for (const toolResult of step.toolResults) {
-        // Tool results have a 'result' property with the actual data
-        const result = toolResult.result as { issues?: JiraIssue[] } | undefined
-        if (result?.issues && Array.isArray(result.issues)) {
-          allIssues.push(...result.issues)
+        // v6 uses 'output' instead of 'result'
+        const output = toolResult.output as { issues?: JiraIssue[] } | undefined
+        if (output?.issues && Array.isArray(output.issues)) {
+          allIssues.push(...output.issues)
         }
       }
     }
