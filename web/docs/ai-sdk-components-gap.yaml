@@ -61,13 +61,13 @@ components:
       status: implemented
       file: src/components/ai-elements/plan.tsx
       notes: Collapsible plan with steps and streaming support
-      integration: NOT YET INTEGRATED into chat-message.tsx
+      integration: BLOCKED - Requires backend to emit 'data-plan' message parts
 
     - name: task
       status: implemented
       file: src/components/ai-elements/task.tsx
       notes: Multi-task list with progress, status indicators
-      integration: NOT YET INTEGRATED into chat-message.tsx
+      integration: OPTIONAL - ChainOfThoughtCard covers this use case; Task is alternative style
 
     # AI-ELEMENTS (Phase 2 - Medium Priority) - COMPLETE
     - name: chain-of-thought
@@ -80,13 +80,13 @@ components:
       status: implemented
       file: src/components/ai-elements/checkpoint.tsx
       notes: Conversation markers with restore/branch actions
-      integration: NOT YET INTEGRATED into chat-message.tsx
+      integration: BLOCKED - Requires conversation history management with branching support
 
     - name: confirmation
       status: implemented
       file: src/components/ai-elements/confirmation.tsx
       notes: User approval prompts with approve/reject state handling
-      integration: NOT YET INTEGRATED into chat-message.tsx
+      integration: BLOCKED - Requires AI SDK tool with requireConfirmation option enabled
 
     - name: context
       status: implemented
@@ -133,18 +133,19 @@ ui_components:
 
 # Integration Status
 integration:
-  status: in_progress
+  status: frontend_complete
   description: |
-    ai-elements components exist. Core components integrated, advanced pending.
+    All frontend-ready ai-elements are integrated. Remaining components require backend support.
   completed:
     - Context (ContextJiraCard) - Shows Jira sources referenced
     - ChainOfThought (ChainOfThoughtCard) - Shows tool execution steps with results
     - InlineCitation (CitationBadge) - Parses [n] patterns and renders hover cards
-  tasks:
-    - Add Plan for multi-step search strategies
-    - Wire up Checkpoint for conversation state
-    - Add Confirmation for sensitive actions
-    - Consider TaskList as alternative display for tool invocations
+  blocked_on_backend:
+    - Plan - Needs backend to emit 'data-plan' message parts with search strategy
+    - Checkpoint - Needs conversation state management with snapshot/branch support
+    - Confirmation - Needs AI SDK tool configured with requireConfirmation:true
+  optional:
+    - Task - Alternative visual style to ChainOfThought; not needed currently
 
 # Phase Summary
 phases:
@@ -165,7 +166,8 @@ phases:
 
   integration:
     name: Wire into Chat Interface
-    status: IN PROGRESS (3/7 complete)
-    priority: CRITICAL
+    status: FRONTEND COMPLETE (3/7 integrated, 4 blocked on backend)
+    priority: DONE for frontend
     completed: [context, chain-of-thought, inline-citation]
-    remaining: [plan, checkpoint, confirmation, task]
+    blocked_backend: [plan, checkpoint, confirmation]
+    optional: [task]
