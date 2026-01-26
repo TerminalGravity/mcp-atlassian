@@ -18,6 +18,10 @@ import {
   CitationBadge,
   type CitationSource,
 } from "@/components/ai-elements/inline-citation"
+import {
+  RefinementChips,
+  type Refinement,
+} from "@/components/ai-elements/refinement-chips"
 
 interface ChatMessageProps {
   message: UIMessage
@@ -212,11 +216,41 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
   const reasoningParts = parts.filter((p): p is { type: 'data-reasoning'; data: { content: string; duration?: number } } =>
     p.type === 'data-reasoning'
   )
+  const refinementParts = parts.filter((p): p is {
+    type: 'data-refinements'
+    id: string
+    data: {
+      originalQuery: string
+      totalResults: number
+      refinements: Refinement[]
+    }
+  } =>
+    p.type === 'data-refinements'
+  )
 
   // Collect all issues from tool outputs for the Sources component
   const allIssues = toolParts
     .flatMap(t => (t.output as { issues?: JiraIssue[] })?.issues || [])
     .filter((issue, index, self) => self.findIndex(i => i.issue_id === issue.issue_id) === index)
+
+  // Handler for refinement selection - constructs a filtered query
+  const handleRefinementSelect = (refinement: Refinement, originalQuery: string) => {
+    if (!onSendMessage) return
+
+    // Build a descriptive query that includes the filter context
+    const filterDescriptions: Record<string, string> = {
+      project: `in ${refinement.filter.value} project`,
+      time: `from ${refinement.label.toLowerCase()}`,
+      type: `of type ${refinement.filter.value}`,
+      priority: `with ${refinement.filter.value} priority`,
+      status: `with status ${refinement.filter.value}`,
+    }
+
+    const filterContext = filterDescriptions[refinement.category] || refinement.label
+    const newQuery = `Show me results ${filterContext}: ${originalQuery}`
+
+    onSendMessage(newQuery)
+  }
 
   return (
     <motion.div
@@ -300,6 +334,15 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
             maxVisible={5}
           />
         )}
+
+        {/* Refinement chips for narrowing search results */}
+        {!isUser && refinementParts.length > 0 && refinementParts.map((part, i) => (
+          <RefinementChips
+            key={`refinements-${part.id || i}`}
+            refinements={part.data.refinements}
+            onSelect={(refinement) => handleRefinementSelect(refinement, part.data.originalQuery)}
+          />
+        ))}
 
         {/* Follow-up suggestions */}
         {!isUser && suggestionParts.length > 0 && suggestionParts.map((part, i) => (
