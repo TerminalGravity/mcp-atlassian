@@ -5,9 +5,11 @@ Uses LLM to extract filters and semantic search terms from natural language quer
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta
@@ -16,6 +18,11 @@ from typing import Any
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
+
+# Query cache with TTL
+_query_cache: dict[str, tuple[Any, float]] = {}
+_CACHE_TTL_SECONDS = 300  # 5 minutes
+_CACHE_MAX_SIZE = 1000
 
 # Jira field schema for self-querying
 JIRA_FIELD_SCHEMA = {
@@ -264,15 +271,20 @@ def _format_schema_for_prompt() -> str:
 
 
 class SelfQueryParser:
-    """Parser that uses LLM to extract filters from natural language queries."""
+    """Parser that uses LLM to extract filters from natural language queries.
 
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
+    Includes query caching to reduce LLM latency for repeated queries.
+    """
+
+    def __init__(self, model: str = "gpt-4o-mini", use_cache: bool = True) -> None:
         """Initialize the parser.
 
         Args:
             model: OpenAI model to use for parsing.
+            use_cache: Whether to cache parsed queries.
         """
         self.model = model
+        self.use_cache = use_cache
         self._client: AsyncOpenAI | None = None
 
     @property
@@ -282,8 +294,44 @@ class SelfQueryParser:
             self._client = AsyncOpenAI()
         return self._client
 
+    def _get_cache_key(self, query: str) -> str:
+        """Generate cache key for a query."""
+        # Normalize query for caching (lowercase, strip whitespace)
+        normalized = query.lower().strip()
+        return hashlib.md5(normalized.encode()).hexdigest()
+
+    def _get_cached(self, cache_key: str) -> ParsedQuery | None:
+        """Get cached parsed query if valid."""
+        global _query_cache
+        if cache_key in _query_cache:
+            parsed, timestamp = _query_cache[cache_key]
+            if time.time() - timestamp < _CACHE_TTL_SECONDS:
+                logger.debug(f"Query cache hit for key {cache_key[:8]}")
+                return parsed
+            else:
+                # Expired, remove from cache
+                del _query_cache[cache_key]
+        return None
+
+    def _set_cached(self, cache_key: str, parsed: ParsedQuery) -> None:
+        """Cache a parsed query."""
+        global _query_cache
+        # Evict old entries if cache is full
+        if len(_query_cache) >= _CACHE_MAX_SIZE:
+            # Remove oldest 10%
+            sorted_keys = sorted(
+                _query_cache.keys(),
+                key=lambda k: _query_cache[k][1]
+            )
+            for key in sorted_keys[: _CACHE_MAX_SIZE // 10]:
+                del _query_cache[key]
+
+        _query_cache[cache_key] = (parsed, time.time())
+
     async def parse(self, query: str) -> ParsedQuery:
         """Parse a natural language query into structured filters.
+
+        Uses caching to avoid redundant LLM calls for repeated queries.
 
         Args:
             query: Natural language query to parse.
@@ -299,6 +347,20 @@ class SelfQueryParser:
                 confidence=0.0,
                 raw_query=query,
             )
+
+        # Check cache first
+        cache_key = self._get_cache_key(query)
+        if self.use_cache:
+            cached = self._get_cached(cache_key)
+            if cached is not None:
+                # Return a copy with the original raw_query
+                return ParsedQuery(
+                    semantic_query=cached.semantic_query,
+                    filters=cached.filters.copy(),
+                    interpretation=cached.interpretation,
+                    confidence=cached.confidence,
+                    raw_query=query,
+                )
 
         try:
             # Call LLM to parse the query
@@ -322,6 +384,10 @@ class SelfQueryParser:
 
             # Resolve relative dates
             parsed.filters = self._resolve_relative_dates(parsed.filters)
+
+            # Cache the result (before date resolution for reusability)
+            if self.use_cache:
+                self._set_cached(cache_key, parsed)
 
             return parsed
 

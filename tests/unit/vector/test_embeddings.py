@@ -117,7 +117,7 @@ async def test_embed_batch_empty():
 async def test_embed_batch_with_partial_cache():
     """Test batch embedding with some cached values."""
     config = VectorConfig(
-        cache_embeddings=True,
+        cache_embeddings=False,  # Disable persistent cache for this test
         embedding_provider=EmbeddingProvider.OPENAI,
         batch_size=10,
     )

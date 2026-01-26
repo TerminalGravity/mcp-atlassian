@@ -757,7 +757,9 @@ class LanceDBStore:
         self,
         project_key: str,
     ) -> dict[str, Any]:
-        """Get aggregated statistics for a project.
+        """Get aggregated statistics for a project using efficient SQL queries.
+
+        Uses LanceDB SQL queries instead of loading entire table to memory.
 
         Args:
             project_key: Project key to analyze
@@ -766,57 +768,94 @@ class LanceDBStore:
             Dictionary with aggregated stats
         """
         try:
-            issues_df = self.issues_table.to_pandas()
-            project_issues = issues_df[issues_df["project_key"] == project_key]
+            # Use efficient filtered query instead of loading all data
+            project_filter = f"project_key = '{project_key}'"
 
-            if len(project_issues) == 0:
+            # Get total count efficiently
+            try:
+                count_results = (
+                    self.issues_table.search()
+                    .where(project_filter, prefilter=True)
+                    .select(["issue_id"])
+                    .limit(100000)
+                    .to_list()
+                )
+                total_count = len(count_results)
+            except Exception:
+                total_count = 0
+
+            if total_count == 0:
                 return {"project_key": project_key, "total_issues": 0}
 
-            # Basic aggregations
-            type_counts = project_issues["issue_type"].value_counts().to_dict()
-            status_counts = project_issues["status_category"].value_counts().to_dict()
-            priority_counts = (
-                project_issues["priority"].value_counts().to_dict()
-                if "priority" in project_issues.columns
-                else {}
+            # Fetch only necessary columns for aggregation (much more efficient)
+            agg_results = (
+                self.issues_table.search()
+                .where(project_filter, prefilter=True)
+                .select([
+                    "issue_type", "status_category", "priority",
+                    "assignee", "labels", "components"
+                ])
+                .limit(100000)
+                .to_list()
             )
 
-            # Assignee distribution (top 10)
-            assignee_counts = (
-                project_issues["assignee"].value_counts().head(10).to_dict()
-            )
+            # Aggregate in-memory (but with minimal data loaded)
+            type_counts: dict[str, int] = {}
+            status_counts: dict[str, int] = {}
+            priority_counts: dict[str, int] = {}
+            assignee_counts: dict[str, int] = {}
+            label_counts: dict[str, int] = {}
+            component_counts: dict[str, int] = {}
 
-            # Label frequency
-            all_labels: list[str] = []
-            for labels in project_issues["labels"]:
+            for row in agg_results:
+                # Issue type
+                issue_type = row.get("issue_type", "Unknown")
+                type_counts[issue_type] = type_counts.get(issue_type, 0) + 1
+
+                # Status category
+                status = row.get("status_category", "Unknown")
+                status_counts[status] = status_counts.get(status, 0) + 1
+
+                # Priority
+                priority = row.get("priority")
+                if priority:
+                    priority_counts[priority] = priority_counts.get(priority, 0) + 1
+
+                # Assignee
+                assignee = row.get("assignee")
+                if assignee:
+                    assignee_counts[assignee] = assignee_counts.get(assignee, 0) + 1
+
+                # Labels (list field)
+                labels = row.get("labels", [])
                 if isinstance(labels, list):
-                    all_labels.extend(labels)
-            label_counts = {}
-            for label in all_labels:
-                label_counts[label] = label_counts.get(label, 0) + 1
+                    for label in labels:
+                        label_counts[label] = label_counts.get(label, 0) + 1
+
+                # Components (list field)
+                components = row.get("components", [])
+                if isinstance(components, list):
+                    for comp in components:
+                        component_counts[comp] = component_counts.get(comp, 0) + 1
+
+            # Get top 10 for each category
+            top_assignees = dict(
+                sorted(assignee_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            )
             top_labels = dict(
                 sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:10]
             )
-
-            # Component distribution
-            all_components: list[str] = []
-            for components in project_issues["components"]:
-                if isinstance(components, list):
-                    all_components.extend(components)
-            component_counts = {}
-            for comp in all_components:
-                component_counts[comp] = component_counts.get(comp, 0) + 1
             top_components = dict(
                 sorted(component_counts.items(), key=lambda x: x[1], reverse=True)[:10]
             )
 
             return {
                 "project_key": project_key,
-                "total_issues": len(project_issues),
+                "total_issues": total_count,
                 "by_type": type_counts,
                 "by_status_category": status_counts,
                 "by_priority": priority_counts,
-                "top_assignees": assignee_counts,
+                "top_assignees": top_assignees,
                 "top_labels": top_labels,
                 "top_components": top_components,
             }
