@@ -107,10 +107,10 @@ class LanceDBStore:
         return self.db.create_table(name, schema=schema)
 
     def bulk_insert_issues(self, issues: list[JiraIssueEmbedding]) -> int:
-        """Bulk insert issues without checking for existing records.
+        """Bulk insert issues, replacing any existing records with same ID.
 
-        Use this for initial full syncs where the table is empty or
-        has been cleared. Much faster than upsert.
+        Performs delete-then-insert to avoid duplicates while maintaining
+        bulk performance for full syncs.
 
         Args:
             issues: List of issue embeddings to insert
@@ -129,6 +129,13 @@ class LanceDBStore:
 
         if len(unique_issues) < len(issues):
             logger.debug(f"Deduplicated {len(issues)} -> {len(unique_issues)} issues")
+
+        # Delete existing records first to prevent duplicates
+        issue_ids = [issue.issue_id for issue in unique_issues]
+        try:
+            self.issues_table.delete(f"issue_id IN {_format_sql_in_clause(issue_ids)}")
+        except Exception:
+            pass  # Table might be empty or IDs don't exist
 
         records = [issue.model_dump() for issue in unique_issues]
         self.issues_table.add(records)

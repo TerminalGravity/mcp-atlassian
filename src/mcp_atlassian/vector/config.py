@@ -8,6 +8,18 @@ from enum import Enum
 from pathlib import Path
 
 
+def _get_default_db_path() -> Path:
+    """Get default database path as absolute path.
+
+    Uses project root's data/lancedb directory to ensure all services
+    (MCP, web UI, CLI) use the same vector store.
+    """
+    # Go up from this file to find project root
+    # config.py -> vector/ -> mcp_atlassian/ -> src/ -> project_root/
+    package_dir = Path(__file__).parent.parent.parent.parent
+    return package_dir / "data" / "lancedb"
+
+
 class EmbeddingProvider(str, Enum):
     """Supported embedding providers."""
 
@@ -32,10 +44,10 @@ class VectorConfig:
         MCP_MAX_RESPONSE_TOKENS: Max tokens in MCP responses
     """
 
-    # Storage
+    # Storage - default to absolute path relative to package location
     db_path: Path = field(
         default_factory=lambda: Path(
-            os.getenv("VECTOR_DB_PATH", "./data/lancedb")
+            os.getenv("VECTOR_DB_PATH", str(_get_default_db_path()))
         )
     )
 
