@@ -96,23 +96,38 @@ async function getLinkedIssues(issueKey: string) {
 function generateFollowUpSuggestions(responseText: string, lastUserMessage: string): string[] {
   const suggestions: string[] = []
 
+  // Track what user already asked about to avoid repeating
+  const alreadyAskedAbout = lastUserMessage.toLowerCase()
+
   // Extract specific issue keys mentioned (prioritize those called out specifically)
   const issueMatches = responseText.match(/DS-\d+/g) || []
-  const uniqueIssues = [...new Set(issueMatches)].slice(0, 5)
+  const uniqueIssues = [...new Set(issueMatches)]
 
-  // Extract key topics/features mentioned
+  // Find issues that are highlighted/emphasized in the response
+  const highlightedIssues = uniqueIssues.filter(i =>
+    responseText.includes(`**${i}**`) ||
+    responseText.includes(`[${i}]`) ||
+    new RegExp(`${i}[^\\d].*(?:blocker|critical|urgent|open|in progress)`, 'i').test(responseText)
+  )
+
+  // Extract key topics/features mentioned with priority scores
   const topicPatterns = [
-    { pattern: /QA|testing|test/i, topic: "QA" },
-    { pattern: /permission|catalog|workspace/i, topic: "permissions" },
-    { pattern: /MVP|demo|release/i, topic: "MVP" },
-    { pattern: /phase\s*2|backlog/i, topic: "Phase 2" },
-    { pattern: /blocker|blocked|blocking/i, topic: "blockers" },
-    { pattern: /performance|N\+1|pagination/i, topic: "performance" },
+    { pattern: /QA|testing|test(?:ing)?/i, topic: "QA", suggestion: "What QA items are still open?", priority: 2 },
+    { pattern: /permission|catalog|workspace/i, topic: "permissions", suggestion: "Tell me about permission issues", priority: 1 },
+    { pattern: /MVP|demo|release/i, topic: "MVP", suggestion: "What's blocking the MVP release?", priority: 3 },
+    { pattern: /phase\s*2/i, topic: "Phase 2", suggestion: "What's the Phase 2 roadmap?", priority: 2 },
+    { pattern: /backlog/i, topic: "backlog", suggestion: "What's in the backlog?", priority: 1 },
+    { pattern: /blocker|blocked|blocking/i, topic: "blockers", suggestion: "List all current blockers", priority: 4 },
+    { pattern: /performance|N\+1|pagination|slow/i, topic: "performance", suggestion: "Show performance issues", priority: 2 },
+    { pattern: /bug|defect|issue/i, topic: "bugs", suggestion: "What bugs are open?",  priority: 2 },
   ]
 
+  // Filter to topics mentioned in response but NOT already asked about
   const detectedTopics = topicPatterns
-    .filter(({ pattern }) => pattern.test(responseText))
-    .map(({ topic }) => topic)
+    .filter(({ pattern, topic }) =>
+      pattern.test(responseText) && !alreadyAskedAbout.includes(topic.toLowerCase())
+    )
+    .sort((a, b) => b.priority - a.priority)
 
   // Extract assignee names mentioned
   const assigneeMatch = responseText.match(/(?:assigned to|Assignee[:\s]+)([A-Z][a-z]+ [A-Z][a-z]+)/gi)
@@ -120,61 +135,57 @@ function generateFollowUpSuggestions(responseText: string, lastUserMessage: stri
     ? [...new Set(assigneeMatch.map(m => m.replace(/assigned to|assignee[:\s]+/i, '').trim()))]
     : []
 
-  // Generate specific suggestions based on extracted context
-
-  // If specific issues were highlighted, offer to drill into them
-  if (uniqueIssues.length > 0) {
-    const highlightedIssue = uniqueIssues.find(i =>
-      responseText.includes(`**${i}**`) || responseText.includes(`[${i}]`)
-    ) || uniqueIssues[0]
-    suggestions.push(`Tell me more about ${highlightedIssue}`)
+  // 1. First priority: Drill into a specific highlighted issue (not one already discussed)
+  const issueToExplore = highlightedIssues.find(i => !alreadyAskedAbout.includes(i.toLowerCase()))
+    || uniqueIssues.find(i => !alreadyAskedAbout.includes(i.toLowerCase()))
+  if (issueToExplore && suggestions.length < 4) {
+    suggestions.push(`Tell me more about ${issueToExplore}`)
   }
 
-  // Topic-specific suggestions
-  if (detectedTopics.includes("QA")) {
-    suggestions.push("What QA items are still open?")
-  }
-  if (detectedTopics.includes("blockers")) {
-    suggestions.push("List all current blockers")
-  }
-  if (detectedTopics.includes("MVP") && !detectedTopics.includes("blockers")) {
-    suggestions.push("What's blocking the MVP?")
-  }
-  if (detectedTopics.includes("Phase 2")) {
-    suggestions.push("What's planned for Phase 2?")
-  }
-  if (detectedTopics.includes("performance")) {
-    suggestions.push("Show performance-related issues")
+  // 2. Add topic-specific suggestions (highest priority topics first)
+  for (const { suggestion } of detectedTopics) {
+    if (suggestions.length >= 4) break
+    if (!suggestions.includes(suggestion)) {
+      suggestions.push(suggestion)
+    }
   }
 
-  // Assignee-specific suggestions
-  if (assignees.length > 0) {
-    const firstName = assignees[0].split(' ')[0]
-    suggestions.push(`What else is ${firstName} working on?`)
+  // 3. Assignee-specific suggestion (if not already asked about that person)
+  if (assignees.length > 0 && suggestions.length < 4) {
+    const person = assignees.find(a => !alreadyAskedAbout.includes(a.toLowerCase().split(' ')[0]))
+    if (person) {
+      const firstName = person.split(' ')[0]
+      suggestions.push(`What else is ${firstName} working on?`)
+    }
   }
 
-  // Status-based suggestions if we talked about in-progress work
-  if (/in progress|development in progress/i.test(responseText)) {
-    suggestions.push("Show only open items")
+  // 4. Status-based suggestions
+  if (suggestions.length < 4) {
+    if (/in progress|development in progress/i.test(responseText) && !alreadyAskedAbout.includes('open')) {
+      suggestions.push("Show only open items")
+    } else if (/closed|done|completed/i.test(responseText) && !alreadyAskedAbout.includes('recent')) {
+      suggestions.push("What was completed recently?")
+    }
   }
 
-  // If response mentioned multiple epics, offer comparison
+  // 5. Comparison if multiple epics discussed
   const epicCount = (responseText.match(/epic/gi) || []).length
-  if (epicCount > 1) {
+  if (epicCount > 1 && suggestions.length < 4 && !alreadyAskedAbout.includes('compare')) {
     suggestions.push("Compare the epics")
   }
 
-  // Fallback suggestions if we don't have enough
+  // 6. Context-aware fallbacks
   const fallbacks = [
-    "Show recent activity",
-    "What needs attention?",
-    "Summarize the status",
+    { text: "What needs attention?", avoid: ["attention", "urgent", "priority"] },
+    { text: "Show recent activity", avoid: ["recent", "activity", "update"] },
+    { text: "Summarize the timeline", avoid: ["timeline", "schedule", "when"] },
+    { text: "Who should I talk to?", avoid: ["who", "contact", "owner"] },
   ]
 
-  while (suggestions.length < 4 && fallbacks.length > 0) {
-    const fallback = fallbacks.shift()!
-    if (!suggestions.includes(fallback)) {
-      suggestions.push(fallback)
+  for (const { text, avoid } of fallbacks) {
+    if (suggestions.length >= 4) break
+    if (!avoid.some(word => alreadyAskedAbout.includes(word))) {
+      suggestions.push(text)
     }
   }
 
