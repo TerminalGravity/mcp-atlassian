@@ -154,7 +154,7 @@ async def generate_answer(query: str, results: list[dict[str, Any]]) -> str:
     try:
         client = get_openai()
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
@@ -299,8 +299,19 @@ async def jql_search(request: JQLSearchRequest):
     if not jql:
         raise HTTPException(status_code=400, detail="JQL is required")
 
+    # Try to get Jira client - return graceful error if not configured
     try:
         jira = get_jira()
+    except Exception as e:
+        logger.warning(f"Jira not configured: {e}")
+        return {
+            "issues": [],
+            "count": 0,
+            "error": "Jira connection not configured",
+            "suggestion": "Use semantic search instead, or configure JIRA_URL and JIRA_API_TOKEN"
+        }
+
+    try:
         # Use the search method from JiraFacade - returns JiraSearchResult
         result = jira.search_issues(jql, limit=request.limit)
 
@@ -328,8 +339,20 @@ async def jql_search(request: JQLSearchRequest):
         return {"issues": issues, "count": len(issues)}
 
     except Exception as e:
-        logger.exception(f"JQL search error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return structured error instead of 500
+        logger.warning(f"JQL search error: {e}")
+        error_msg = str(e)
+        suggestion = "Check your JQL syntax or use semantic search"
+        if "401" in error_msg or "not authenticated" in error_msg.lower():
+            suggestion = "Jira credentials may be invalid. Use semantic search instead."
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            suggestion = "The specified project or field may not exist."
+        return {
+            "issues": [],
+            "count": 0,
+            "error": f"JQL search failed: {error_msg[:100]}",
+            "suggestion": suggestion
+        }
 
 
 def main():

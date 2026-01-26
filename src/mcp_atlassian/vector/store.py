@@ -121,7 +121,16 @@ class LanceDBStore:
         if not issues:
             return 0
 
-        records = [issue.model_dump() for issue in issues]
+        # Deduplicate by issue_id (keep last occurrence for most recent data)
+        seen_ids: dict[str, JiraIssueEmbedding] = {}
+        for issue in issues:
+            seen_ids[issue.issue_id] = issue
+        unique_issues = list(seen_ids.values())
+
+        if len(unique_issues) < len(issues):
+            logger.debug(f"Deduplicated {len(issues)} -> {len(unique_issues)} issues")
+
+        records = [issue.model_dump() for issue in unique_issues]
         self.issues_table.add(records)
         logger.info(f"Bulk inserted {len(records)} issues")
         return len(records)
@@ -328,24 +337,108 @@ class LanceDBStore:
             logger.warning(f"Error getting issue {issue_key}: {e}")
             return None
 
+    def get_all_issue_ids(self, project_key: str | None = None) -> set[str]:
+        """Get all indexed issue IDs, optionally filtered by project.
+
+        Used for deletion detection during sync.
+
+        Args:
+            project_key: Optional project key to filter by
+
+        Returns:
+            Set of issue IDs currently in the index
+        """
+        try:
+            query = self.issues_table.search().select(["issue_id"])
+
+            if project_key:
+                query = query.where(f"project_key = '{project_key}'", prefilter=True)
+
+            # Fetch in batches to handle large indexes
+            batch_size = 10000
+            all_ids: set[str] = set()
+            offset = 0
+
+            while True:
+                results = query.limit(batch_size).to_list()
+                if not results:
+                    break
+
+                batch_ids = {r["issue_id"] for r in results}
+                all_ids.update(batch_ids)
+
+                if len(results) < batch_size:
+                    break
+
+                offset += batch_size
+                # LanceDB doesn't support offset directly, so we use ID filtering
+                # for subsequent batches
+                if batch_ids:
+                    max_id = max(batch_ids)
+                    query = query.where(f"issue_id > '{max_id}'", prefilter=True)
+
+            logger.debug(f"Found {len(all_ids)} indexed issues for project {project_key or 'all'}")
+            return all_ids
+
+        except Exception as e:
+            logger.warning(f"Error getting indexed issue IDs: {e}")
+            return set()
+
+    def delete_issues_by_ids(self, issue_ids: list[str]) -> int:
+        """Delete specific issues by their IDs.
+
+        Used for removing deleted Jira issues from the index.
+
+        Args:
+            issue_ids: List of issue IDs to delete
+
+        Returns:
+            Number of issues deleted
+        """
+        if not issue_ids:
+            return 0
+
+        try:
+            # Delete in batches to avoid SQL limits
+            batch_size = 500
+            deleted = 0
+
+            for i in range(0, len(issue_ids), batch_size):
+                batch = issue_ids[i : i + batch_size]
+                self.issues_table.delete(f"issue_id IN {_format_sql_in_clause(batch)}")
+                deleted += len(batch)
+
+            logger.info(f"Deleted {deleted} stale issues from index")
+            return deleted
+
+        except Exception as e:
+            logger.error(f"Error deleting issues: {e}")
+            return 0
+
     def search_issues(
         self,
         query_vector: list[float],
         limit: int = 10,
+        offset: int = 0,
         filters: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Search issues by vector similarity.
+        min_score: float = 0.0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Search issues by vector similarity with pagination.
 
         Args:
             query_vector: Query embedding vector
             limit: Maximum results to return
+            offset: Number of results to skip (for pagination)
             filters: Optional metadata filters
+            min_score: Minimum similarity score (0.0-1.0) to include in results
 
         Returns:
-            List of matching issues with scores
+            Tuple of (results list, total matching count)
         """
-        # Fetch extra results to handle potential duplicates
-        search = self.issues_table.search(query_vector).limit(limit * 3)
+        # Fetch extra results to compensate for filtering, deduplication, and offset
+        fetch_limit = max((limit + offset) * 5, 100) if min_score > 0 else (limit + offset) * 3
+        search = self.issues_table.search(query_vector).limit(fetch_limit)
+        search = search.distance_type("cosine")  # Explicit cosine similarity
 
         # Apply filters
         if filters:
@@ -355,48 +448,66 @@ class LanceDBStore:
 
         results = search.to_list()
 
-        # Add similarity score and deduplicate by issue_id
+        # Calculate proper similarity scores and deduplicate
         seen_ids: set[str] = set()
-        unique_results: list[dict[str, Any]] = []
+        all_matching: list[dict[str, Any]] = []
         for r in results:
             issue_id = r.get("issue_id")
             if issue_id and issue_id not in seen_ids:
-                seen_ids.add(issue_id)
-                r["score"] = 1 - r.get("_distance", 0)  # Convert distance to similarity
-                unique_results.append(r)
-                if len(unique_results) >= limit:
-                    break
+                # For cosine metric: distance = 1 - similarity
+                # So: similarity = 1 - distance, clamped to [0, 1]
+                distance = r.get("_distance", 1.0)
+                similarity = max(0.0, min(1.0, 1.0 - distance))
 
-        return unique_results
+                # Apply score threshold
+                if similarity >= min_score:
+                    seen_ids.add(issue_id)
+                    r["score"] = round(similarity, 4)
+                    all_matching.append(r)
+
+        # Apply offset and limit for pagination
+        total_count = len(all_matching)
+        paginated_results = all_matching[offset : offset + limit]
+
+        return paginated_results, total_count
 
     def hybrid_search(
         self,
         query_vector: list[float],
         query_text: str,
         limit: int = 10,
+        offset: int = 0,
         filters: dict[str, Any] | None = None,
         fts_weight: float = 0.3,
-    ) -> list[dict[str, Any]]:
-        """Hybrid search combining vector and full-text search.
+        min_score: float = 0.0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Hybrid search combining vector and full-text search with pagination.
 
         Args:
             query_vector: Query embedding vector
             query_text: Query text for FTS
             limit: Maximum results to return
+            offset: Number of results to skip (for pagination)
             filters: Optional metadata filters
             fts_weight: Weight for FTS score (0-1), vector gets 1-fts_weight
+            min_score: Minimum score threshold for results
 
         Returns:
-            List of matching issues with combined scores
+            Tuple of (results list, total matching count)
         """
-        # Vector search
-        vector_results = self.search_issues(
-            query_vector, limit=limit * 2, filters=filters
+        # Vector search with lower threshold to allow fusion boost
+        # Fetch more to account for offset
+        vector_results, _ = self.search_issues(
+            query_vector,
+            limit=(limit + offset) * 3,
+            offset=0,
+            filters=filters,
+            min_score=min_score * 0.5,
         )
 
         # Full-text search on summary and description
         fts_results = self._full_text_search(
-            query_text, limit=limit * 2, filters=filters
+            query_text, limit=(limit + offset) * 3, filters=filters
         )
 
         # Combine results with score fusion
@@ -404,9 +515,15 @@ class LanceDBStore:
             vector_results, fts_results, fts_weight=fts_weight
         )
 
-        # Sort by combined score and limit
-        combined.sort(key=lambda x: x["score"], reverse=True)
-        return combined[:limit]
+        # Filter by min_score and sort
+        filtered = [r for r in combined if r.get("score", 0) >= min_score]
+        filtered.sort(key=lambda x: x["score"], reverse=True)
+
+        # Apply pagination
+        total_count = len(filtered)
+        paginated_results = filtered[offset : offset + limit]
+
+        return paginated_results, total_count
 
     def _full_text_search(
         self,
@@ -593,6 +710,7 @@ class LanceDBStore:
             List of matching comments with scores
         """
         search = self.comments_table.search(query_vector).limit(limit)
+        search = search.distance_type("cosine")  # Explicit cosine similarity
 
         # Apply filters
         if filters:
@@ -602,9 +720,10 @@ class LanceDBStore:
 
         results = search.to_list()
 
-        # Add similarity score
+        # Add similarity score (cosine: distance = 1 - similarity)
         for r in results:
-            r["score"] = 1 - r.get("_distance", 0)  # Convert distance to similarity
+            distance = r.get("_distance", 1.0)
+            r["score"] = round(max(0.0, min(1.0, 1.0 - distance)), 4)
 
         return results
 

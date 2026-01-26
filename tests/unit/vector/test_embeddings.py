@@ -40,7 +40,8 @@ def test_embedding_pipeline_init():
 
     assert pipeline.config == config
     assert pipeline._client is None
-    assert pipeline._cache == {}
+    assert pipeline._memory_cache == {}  # Memory cache for hot access
+    assert pipeline._persistent_cache is None  # Lazy-loaded
 
 
 def test_embedding_pipeline_cache_key():
@@ -59,12 +60,12 @@ def test_embedding_pipeline_cache_key():
 def test_clear_cache():
     """Test cache clearing."""
     pipeline = EmbeddingPipeline()
-    pipeline._cache["key1"] = [0.1, 0.2]
-    pipeline._cache["key2"] = [0.3, 0.4]
+    pipeline._memory_cache["key1"] = [0.1, 0.2]
+    pipeline._memory_cache["key2"] = [0.3, 0.4]
 
-    assert len(pipeline._cache) == 2
+    assert len(pipeline._memory_cache) == 2
     pipeline.clear_cache()
-    assert len(pipeline._cache) == 0
+    assert len(pipeline._memory_cache) == 0
 
 
 def test_cache_stats():
@@ -74,14 +75,15 @@ def test_cache_stats():
 
     # Empty cache
     stats = pipeline.cache_stats()
-    assert stats["cached_embeddings"] == 0
+    assert stats["memory_cache_entries"] == 0
 
-    # Add some embeddings
-    pipeline._cache["key1"] = [0.0] * 1536
-    pipeline._cache["key2"] = [0.0] * 1536
+    # Add some embeddings to memory cache
+    pipeline._memory_cache["key1"] = [0.0] * 1536
+    pipeline._memory_cache["key2"] = [0.0] * 1536
 
     stats = pipeline.cache_stats()
-    assert stats["cached_embeddings"] == 2
+    assert stats["memory_cache_entries"] == 2
+    assert "memory_cache_mb" in stats
 
 
 @pytest.mark.asyncio
@@ -93,10 +95,10 @@ async def test_embed_with_cache():
     )
     pipeline = EmbeddingPipeline(config=config)
 
-    # Pre-populate cache
+    # Pre-populate memory cache (simulating a hot cache hit)
     cached_embedding = [0.1, 0.2, 0.3]
     cache_key = pipeline._get_cache_key("test text")
-    pipeline._cache[cache_key] = cached_embedding
+    pipeline._memory_cache[cache_key] = cached_embedding
 
     # Should return cached value without calling API
     result = await pipeline.embed("test text")
@@ -121,10 +123,10 @@ async def test_embed_batch_with_partial_cache():
     )
     pipeline = EmbeddingPipeline(config=config)
 
-    # Cache one embedding
+    # Cache one embedding in memory cache
     cached_embedding = [0.1, 0.2, 0.3]
     cache_key = pipeline._get_cache_key("cached text")
-    pipeline._cache[cache_key] = cached_embedding
+    pipeline._memory_cache[cache_key] = cached_embedding
 
     # Mock OpenAI call for uncached text
     mock_response = MagicMock()

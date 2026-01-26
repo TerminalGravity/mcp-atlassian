@@ -103,6 +103,17 @@ class VectorConfig:
         default_factory=lambda: float(os.getenv("VECTOR_FTS_WEIGHT", "0.3"))
     )
 
+    # Search quality thresholds
+    default_min_score: float = field(
+        default_factory=lambda: float(os.getenv("VECTOR_DEFAULT_MIN_SCORE", "0.3"))
+    )
+    duplicate_threshold: float = field(
+        default_factory=lambda: float(os.getenv("VECTOR_DUPLICATE_THRESHOLD", "0.85"))
+    )
+    similar_threshold: float = field(
+        default_factory=lambda: float(os.getenv("VECTOR_SIMILAR_THRESHOLD", "0.5"))
+    )
+
     @classmethod
     def from_env(cls) -> VectorConfig:
         """Create config from environment variables."""

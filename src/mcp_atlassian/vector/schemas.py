@@ -23,6 +23,7 @@ class JiraIssueEmbedding(LanceModel):
     project_key: str = Field(description="Project key extracted from issue_id")
 
     # Vector embedding (1536 dims for OpenAI text-embedding-3-small)
+    # Note: Cosine metric is specified at query time in store.py
     vector: Vector(1536)  # type: ignore[valid-type]
 
     # Core text fields (indexed for FTS)

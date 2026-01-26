@@ -98,12 +98,29 @@ async def jira_semantic_search(
     limit: Annotated[
         int,
         Field(
-            description="Maximum results to return (1-20)",
+            description="Maximum results to return (1-50)",
             ge=1,
-            le=20,
+            le=50,
             default=10,
         ),
     ] = 10,
+    offset: Annotated[
+        int,
+        Field(
+            description="Number of results to skip for pagination (default 0)",
+            ge=0,
+            default=0,
+        ),
+    ] = 0,
+    min_score: Annotated[
+        float,
+        Field(
+            description="Minimum relevance score (0.0-1.0). Use 0.3 for broad, 0.6 for precise",
+            ge=0.0,
+            le=1.0,
+            default=0.3,
+        ),
+    ] = 0.3,
 ) -> str:
     """
     Semantic search across Jira issues using natural language.
@@ -112,6 +129,7 @@ async def jira_semantic_search(
     'performance issues with database queries' or 'authentication failures'.
 
     Returns compact results (~500-800 tokens). Use jira_get_issue for full details.
+    Supports pagination with offset parameter for browsing large result sets.
 
     Args:
         ctx: The FastMCP context.
@@ -120,9 +138,11 @@ async def jira_semantic_search(
         issue_types: Comma-separated issue types to filter by.
         status_category: Status category filter.
         limit: Maximum number of results.
+        offset: Number of results to skip for pagination.
+        min_score: Minimum relevance score threshold.
 
     Returns:
-        JSON string with matching issues and relevance scores.
+        JSON string with matching issues, relevance scores, and pagination info.
     """
     try:
         store = _get_store()
@@ -149,19 +169,22 @@ async def jira_semantic_search(
         if status_category:
             filters["status_category"] = status_category
 
-        # Perform hybrid search
-        results = store.hybrid_search(
+        # Perform hybrid search with score threshold and pagination
+        results, total_count = store.hybrid_search(
             query_vector=query_vector,
             query_text=query,
             limit=limit,
+            offset=offset,
             filters=filters if filters else None,
             fts_weight=config.fts_weight,
+            min_score=min_score,
         )
 
-        # Format response (token-optimized)
-        response = {
+        # Format response (token-optimized with pagination)
+        response: dict[str, Any] = {
             "query": query,
-            "total_matches": len(results),
+            "total_matches": total_count,
+            "returned": len(results),
             "results": [
                 {
                     "key": r["issue_id"],
@@ -175,6 +198,15 @@ async def jira_semantic_search(
             ],
             "hint": "Use jira_get_issue with issue key for full details",
         }
+
+        # Add pagination info if there are more results
+        if total_count > offset + len(results):
+            response["pagination"] = {
+                "offset": offset,
+                "limit": limit,
+                "next_offset": offset + limit,
+                "has_more": True,
+            }
 
         return json.dumps(response, indent=2, ensure_ascii=False)
 
@@ -240,39 +272,87 @@ async def jira_find_similar(
     Returns:
         JSON string with similar issues and scores.
     """
+    from mcp_atlassian.jira import JiraFacade
+    from mcp_atlassian.vector.schemas import prepare_issue_for_embedding
+
     try:
         store = _get_store()
+        embedder = _get_embedder()
+        config = _get_config()
 
-        # Get source issue
+        # Try to get source issue from index
         source = store.get_issue_by_key(issue_key)
-        if not source:
-            return json.dumps({
-                "error": f"Issue {issue_key} not found in index",
-                "hint": "The issue may not be indexed yet. Run sync to update.",
-            }, indent=2)
+        source_summary = ""
+        project_key = issue_key.split("-")[0]
+        linked_issues: list[str] = []
+
+        if source:
+            # Use indexed issue
+            query_vector = source.vector
+            source_summary = source.summary[:100]
+            project_key = source.project_key
+            linked_issues = source.linked_issues or []
+        else:
+            # Fallback: fetch from Jira and embed on-the-fly
+            logger.info(f"Issue {issue_key} not in index, fetching from Jira")
+            try:
+                jira = JiraFacade()
+                issue = jira.get_issue(
+                    issue_key=issue_key,
+                    fields="summary,description,status,issuetype,labels,components,project",
+                    comment_limit=0,
+                )
+
+                # Prepare for embedding
+                issue_dict = {
+                    "issue_id": issue.key,
+                    "summary": issue.summary or "",
+                    "description": issue.description or "",
+                    "issue_type": issue.issue_type.name if issue.issue_type else "",
+                    "status": issue.status.name if issue.status else "",
+                    "labels": issue.labels or [],
+                    "components": list(issue.components or []),
+                    "project_key": issue.key.split("-")[0],
+                }
+
+                # Generate embedding on-the-fly
+                text = prepare_issue_for_embedding(issue_dict)
+                query_vector = await embedder.embed(text)
+                source_summary = issue.summary[:100] if issue.summary else ""
+                project_key = issue_dict["project_key"]
+
+            except Exception as e:
+                return json.dumps({
+                    "error": f"Issue {issue_key} not found in index or Jira: {e}",
+                    "hint": "Run sync to index this issue, or check the issue key",
+                }, indent=2)
 
         # Build filters
         filters: dict[str, Any] = {"issue_id": {"$ne": issue_key}}
         if same_project_only:
-            filters["project_key"] = source.project_key
-        if exclude_linked and source.linked_issues:
+            filters["project_key"] = project_key
+        if exclude_linked and linked_issues:
             # Exclude source and linked issues
-            exclude_ids = [issue_key] + source.linked_issues
+            exclude_ids = [issue_key] + linked_issues
             filters["issue_id"] = {"$nin": exclude_ids}
 
-        # Search by source vector
-        results = store.search_issues(
-            query_vector=source.vector,
+        # Search by source vector with similarity threshold
+        results, total_count = store.search_issues(
+            query_vector=query_vector,
             limit=limit,
+            offset=0,
             filters=filters,
+            min_score=config.similar_threshold,
         )
 
         response = {
             "source_issue": {
                 "key": issue_key,
-                "summary": source.summary[:100],
-                "project": source.project_key,
+                "summary": source_summary,
+                "project": project_key,
+                "indexed": source is not None,
             },
+            "total_similar": total_count,
             "similar_issues": [
                 {
                     "key": r["issue_id"],
@@ -373,9 +453,10 @@ async def jira_detect_duplicates(
         filters["status_category"] = {"$ne": "Done"}
 
         # Search
-        results = store.search_issues(
+        results, _ = store.search_issues(
             query_vector=query_vector,
             limit=10,
+            offset=0,
             filters=filters if filters else None,
         )
 
@@ -561,10 +642,11 @@ async def jira_knowledge_query(
             lancedb_filters = parser.translate_to_lancedb_filters(parsed.filters)
 
             # Perform hybrid search
-            results = store.hybrid_search(
+            results, total_count = store.hybrid_search(
                 query_vector=query_vector,
                 query_text=parsed.semantic_query,
                 limit=limit,
+                offset=0,
                 filters=lancedb_filters if lancedb_filters else None,
                 fts_weight=config.fts_weight,
             )
@@ -575,9 +657,10 @@ async def jira_knowledge_query(
             query_vector = await embedder.embed("issue")
             lancedb_filters = parser.translate_to_lancedb_filters(parsed.filters)
 
-            results = store.search_issues(
+            results, total_count = store.search_issues(
                 query_vector=query_vector,
                 limit=limit,
+                offset=0,
                 filters=lancedb_filters,
             )
         else:
@@ -597,7 +680,8 @@ async def jira_knowledge_query(
                 "interpretation": parsed.interpretation,
                 "confidence": parsed.confidence,
             },
-            "total_matches": len(results),
+            "total_matches": total_count,
+            "returned": len(results),
             "results": [
                 {
                     "key": r["issue_id"],
@@ -1526,10 +1610,11 @@ async def jira_ai_query(
             filters["project_key"] = project
 
         # Search for relevant issues
-        issue_results = store.hybrid_search(
+        issue_results, _ = store.hybrid_search(
             query_vector=query_vector,
             query_text=question,
             limit=max_issues,
+            offset=0,
             filters=filters if filters else None,
             fts_weight=config.fts_weight,
         )

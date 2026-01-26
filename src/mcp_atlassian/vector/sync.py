@@ -105,6 +105,7 @@ class SyncResult:
     issues_processed: int = 0
     issues_embedded: int = 0
     issues_skipped: int = 0
+    issues_deleted: int = 0  # Stale issues removed from index
     comments_processed: int = 0
     comments_embedded: int = 0
     errors: list[str] = field(default_factory=list)
@@ -252,18 +253,90 @@ class VectorSyncEngine:
                 logger.error(error_msg)
                 result.errors.append(error_msg)
 
+        # Detect and remove deleted issues (periodically during incremental sync)
+        # Only run deletion detection if we processed a significant number of issues
+        # or if it's been a while since last deletion check
+        if result.issues_processed > 0:
+            for project_key in projects_to_sync:
+                try:
+                    deleted = await self._detect_and_remove_deleted_issues(project_key)
+                    result.issues_deleted += deleted
+                except Exception as e:
+                    logger.warning(f"Deletion detection failed for {project_key}: {e}")
+
         # Finalize state
         state.last_sync_at = datetime.utcnow()
-        state.total_issues_indexed += result.issues_embedded
+        state.total_issues_indexed += result.issues_embedded - result.issues_deleted
         self._save_state(state)
 
         result.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
         logger.info(
-            f"Incremental sync complete: {result.issues_embedded} issues updated "
-            f"in {result.duration_seconds:.1f}s"
+            f"Incremental sync complete: {result.issues_embedded} updated, "
+            f"{result.issues_deleted} deleted in {result.duration_seconds:.1f}s"
         )
 
         return result
+
+    async def _detect_and_remove_deleted_issues(
+        self,
+        project_key: str,
+        batch_size: int = 100,
+    ) -> int:
+        """Detect and remove issues that have been deleted from Jira.
+
+        Compares indexed issue IDs against current Jira issues and removes
+        stale entries from the vector index.
+
+        Args:
+            project_key: Project key to check
+            batch_size: Number of issues to verify per Jira API call
+
+        Returns:
+            Number of deleted issues removed from index
+        """
+        # Get all indexed issue IDs for this project
+        indexed_ids = self.store.get_all_issue_ids(project_key=project_key)
+        if not indexed_ids:
+            return 0
+
+        logger.info(f"Checking {len(indexed_ids)} indexed issues for deletion in {project_key}")
+
+        # Check which issues still exist in Jira (in batches)
+        deleted_ids: list[str] = []
+        indexed_list = list(indexed_ids)
+
+        for i in range(0, len(indexed_list), batch_size):
+            batch = indexed_list[i : i + batch_size]
+
+            # Build JQL to find existing issues
+            # Use issue key directly for efficiency
+            keys_str = ", ".join(batch)
+            jql = f"key in ({keys_str})"
+
+            try:
+                search_result = self.jira.search_issues(
+                    jql=jql,
+                    fields="key",
+                    limit=len(batch),
+                )
+                existing_keys = {issue.key for issue in search_result.issues}
+
+                # Find issues that no longer exist
+                for issue_id in batch:
+                    if issue_id not in existing_keys:
+                        deleted_ids.append(issue_id)
+
+            except Exception as e:
+                logger.warning(f"Error checking issue existence: {e}")
+                # Don't delete if we can't verify - could be a transient error
+                continue
+
+        # Remove deleted issues from index
+        if deleted_ids:
+            logger.info(f"Removing {len(deleted_ids)} deleted issues from index: {deleted_ids[:5]}...")
+            self.store.delete_issues_by_ids(deleted_ids)
+
+        return len(deleted_ids)
 
     async def _sync_project(
         self,
@@ -298,16 +371,17 @@ class VectorSyncEngine:
                 f"ORDER BY updated ASC"
             )
         else:
-            jql = f'project = "{project_key}" ORDER BY created ASC'
+            # Only sync issues updated since 2022, most recent first
+            jql = f'project = "{project_key}" AND updated >= "2022-01-01" ORDER BY updated DESC'
 
         logger.info(f"Syncing project {project_key} with JQL: {jql}")
 
         # Fetch issues in batches - use larger batches for full syncs
         offset = 0
         fetch_batch_size = 100  # Jira API limit
-        # Accumulate more issues before embedding for efficiency
-        embed_batch_size = 500 if not incremental else self.config.batch_size
-        issues_to_embed: list[dict[str, Any]] = []
+        # Accumulate issues before embedding - balance between efficiency and progress feedback
+        embed_batch_size = 100 if not incremental else self.config.batch_size
+        issues_to_embed: dict[str, dict[str, Any]] = {}  # Use dict to dedupe by issue_id
         max_updated = state.last_issue_updated
 
         while True:
@@ -343,7 +417,7 @@ class VectorSyncEngine:
                             continue
 
                     issue_dict["content_hash"] = content_hash
-                    issues_to_embed.append(issue_dict)
+                    issues_to_embed[issue_dict["issue_id"]] = issue_dict  # Dedupe by ID
 
                     # Track max updated time (parse string to datetime for comparison)
                     updated_at_str = issue_dict["updated_at"]
@@ -363,14 +437,14 @@ class VectorSyncEngine:
                 # Embed and store in batches
                 if len(issues_to_embed) >= embed_batch_size:
                     embedded_count = await self._embed_and_store(
-                        issues_to_embed, bulk_insert=not incremental
+                        list(issues_to_embed.values()), bulk_insert=not incremental
                     )
                     result.issues_embedded += embedded_count
                     logger.info(
                         f"Progress: {result.issues_embedded} issues embedded "
                         f"({result.issues_processed} processed)"
                     )
-                    issues_to_embed = []
+                    issues_to_embed = {}
 
                 offset += fetch_batch_size
 
@@ -387,7 +461,7 @@ class VectorSyncEngine:
         # Process remaining issues
         if issues_to_embed:
             embedded_count = await self._embed_and_store(
-                issues_to_embed, bulk_insert=not incremental
+                list(issues_to_embed.values()), bulk_insert=not incremental
             )
             result.issues_embedded += embedded_count
 
@@ -640,18 +714,20 @@ class VectorSyncEngine:
             clean_body = clean_jira_markup(body)
             body_preview = truncate_at_sentence(clean_body, max_chars=300)
 
-            # Get author
-            if hasattr(comment, "author"):
+            # Get author with robust type checking
+            author = "Unknown"
+            if hasattr(comment, "author") and comment.author:
                 author = getattr(comment.author, "displayName", None)
                 if not author:
                     author = getattr(comment.author, "name", "Unknown")
             elif isinstance(comment, dict):
-                author_data = comment.get("author", {})
-                author = author_data.get(
-                    "displayName", author_data.get("name", "Unknown")
-                )
-            else:
-                author = "Unknown"
+                author_data = comment.get("author")
+                if isinstance(author_data, dict):
+                    author = author_data.get(
+                        "displayName", author_data.get("name", "Unknown")
+                    )
+                elif isinstance(author_data, str):
+                    author = author_data
 
             # Get created date
             if hasattr(comment, "created"):
