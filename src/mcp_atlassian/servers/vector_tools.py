@@ -1843,3 +1843,165 @@ Guidelines:
         logger.error(f"OpenAI API error generating answer: {e}")
         msg = f"Failed to generate answer: {e!s}"
         raise ValueError(msg) from e
+
+
+@jira_mcp.tool(
+    tags={"jira", "vector", "read", "resolution"},
+    annotations={"title": "Resolution Patterns", "readOnlyHint": True},
+)
+async def jira_resolution_patterns(
+    ctx: Context,
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "Describe the issue pattern to find resolutions for. "
+                "Examples: 'card declined errors', 'webhook timeout issues', "
+                "'SSO configuration problems'"
+            )
+        ),
+    ],
+    projects: Annotated[
+        str | None,
+        Field(
+            description="Comma-separated project keys to search (e.g., 'CS,SUP')",
+            default=None,
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(
+            description="Maximum results to return (1-20)",
+            ge=1,
+            le=20,
+            default=10,
+        ),
+    ] = 10,
+    include_comments: Annotated[
+        bool,
+        Field(
+            description="Include resolution comments in results (slower but more detailed)",
+            default=True,
+        ),
+    ] = True,
+    min_score: Annotated[
+        float,
+        Field(
+            description="Minimum relevance score (0.0-1.0)",
+            ge=0.0,
+            le=1.0,
+            default=0.4,
+        ),
+    ] = 0.4,
+) -> str:
+    """
+    Find resolution patterns for similar issues.
+
+    Searches resolved issues semantically and extracts resolution information
+    from comments. Useful for:
+    - Finding how similar issues were resolved in the past
+    - Identifying common solutions for recurring problems
+    - Building knowledge base of resolutions for support teams
+
+    Returns resolved issues with their resolution comments if available.
+
+    Args:
+        ctx: The FastMCP context.
+        query: Description of the issue pattern to find resolutions for.
+        projects: Optional comma-separated project keys to filter.
+        limit: Maximum number of results.
+        include_comments: Whether to include comments (contains resolution details).
+        min_score: Minimum similarity score threshold.
+
+    Returns:
+        JSON string with resolved issues and their resolution information.
+    """
+    try:
+        store = _get_store()
+        embedder = _get_embedder()
+
+        # Check if index has data
+        stats = store.get_stats()
+        if stats["total_issues"] == 0:
+            return json.dumps({
+                "error": "No issues indexed yet",
+                "hint": "Run sync first: mcp-atlassian-vector sync --full",
+            }, indent=2)
+
+        # Generate query embedding
+        query_vector = await embedder.embed(query)
+
+        # Build filters for resolved issues only
+        filters: dict[str, Any] = {
+            "status_category": "Done",  # Only resolved issues
+        }
+
+        # Add project filter if specified
+        if projects:
+            project_list = [p.strip().upper() for p in projects.split(",")]
+            if len(project_list) == 1:
+                filters["project_key"] = project_list[0]
+            else:
+                filters["project_key"] = {"$in": project_list}
+
+        # Search for resolved issues
+        results, total_count = store.search_issues(
+            query_vector=query_vector,
+            limit=limit,
+            filters=filters,
+            min_score=min_score,
+        )
+
+        # Optionally fetch comments for resolution details
+        resolution_data = []
+        for issue in results:
+            issue_data = {
+                "key": issue["issue_id"],
+                "summary": issue["summary"][:150],
+                "type": issue["issue_type"],
+                "status": issue["status"],
+                "project": issue["project_key"],
+                "resolved_at": issue.get("resolved_at"),
+                "score": round(issue.get("score", 0), 3),
+            }
+
+            # Fetch comments if requested
+            if include_comments and stats["total_comments"] > 0:
+                try:
+                    # Search for comments on this issue
+                    comment_results = store.search_comments(
+                        query_vector=query_vector,
+                        limit=3,
+                        filters={"issue_key": issue["issue_id"]},
+                    )
+                    if comment_results:
+                        issue_data["resolution_comments"] = [
+                            {
+                                "author": c["author"],
+                                "preview": c["body_preview"][:200],
+                            }
+                            for c in comment_results
+                        ]
+                except Exception as e:
+                    logger.debug(f"Could not fetch comments for {issue['issue_id']}: {e}")
+
+            resolution_data.append(issue_data)
+
+        # Build response
+        response = {
+            "query": query,
+            "filter": "resolved issues only",
+            "total_resolved_matches": total_count,
+            "returned": len(resolution_data),
+            "patterns": resolution_data,
+            "hint": "Use jira_get_issue with issue key for full details including all comments",
+        }
+
+        return json.dumps(response, indent=2, ensure_ascii=False, default=str)
+
+    except Exception as e:
+        logger.error(f"Resolution patterns error: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "query": query,
+        }, indent=2)
