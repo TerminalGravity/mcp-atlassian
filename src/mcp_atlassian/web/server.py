@@ -19,6 +19,7 @@ from mcp_atlassian.vector.scheduler import SyncScheduler
 from mcp_atlassian.vector.store import LanceDBStore
 from mcp_atlassian.web.mongo import check_connection as check_mongo, close_connection as close_mongo
 from mcp_atlassian.web.output_modes import router as output_modes_router, seed_default_templates
+from mcp_atlassian.web.eval_routes import router as eval_router
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,9 @@ app.add_middleware(
 
 # Register output modes router
 app.include_router(output_modes_router)
+
+# Register evaluation router
+app.include_router(eval_router)
 
 
 class SearchRequest(BaseModel):

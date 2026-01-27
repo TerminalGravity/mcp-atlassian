@@ -26,11 +26,12 @@ const JQL_PATTERNS = [
 
 // Patterns that indicate conceptual/semantic queries
 const SEMANTIC_PATTERNS = [
-  /\bwhat is\b/i,
-  /\bhow does\b/i,
+  /\bwhat (is|are)\b/i,  // "what is", "what are"
+  /\bhow (do|does|did|can|could|should)\b/i,  // "how does", "how can"
   /\bwhy (do|does|did|is|are|was|were)\b/i,
   /\bexplain\b/i,
   /\btell me about\b/i,
+  /\bshow me\b/i,  // "show me the issues"
   /\bwhat('s| is) the (status|progress|state) of\b/i,
   /\b(related to|about|regarding|concerning)\b/i,
 ]

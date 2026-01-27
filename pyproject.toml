@@ -44,6 +44,12 @@ local-embeddings = [
     "sentence-transformers>=2.2.0",
     "torch>=2.0.0",
 ]
+eval = [
+    "deepeval>=2.0.0",
+    "ragas>=0.2.0",
+    "datasets>=2.0.0",
+    "langchain-openai>=0.1.0",
+]
 [[project.authors]]
 name = "Jack Felke"
 email = "jfelke@alldigitalrewards.com"
@@ -116,6 +122,8 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "src/mcp_atlassian/vector/*.py" = ["BLE001", "S324", "FBT", "DTZ"]
 "src/mcp_atlassian/servers/vector_tools.py" = ["E501", "BLE001", "FBT", "S110"]
 "src/mcp_atlassian/web/*.py" = ["BLE001", "S110"]
+"src/mcp_atlassian/eval/*.py" = ["BLE001", "DTZ", "FBT", "E501"]
+"src/mcp_atlassian/eval/metrics/*.py" = ["BLE001", "E501"]
 
 [tool.ruff.format]
 quote-style = "double"

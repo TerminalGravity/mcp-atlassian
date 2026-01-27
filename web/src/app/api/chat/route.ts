@@ -10,7 +10,8 @@ import {
   type UIMessage
 } from "ai"
 
-import { executeResearchPipeline, buildResearchContext, type JiraIssue } from './research-pipeline'
+import { executeResearchPipeline, buildResearchContext, type JiraIssue, type ResearchResult } from './research-pipeline'
+import { buildEvalLogData, logEvaluation } from './eval-logger'
 
 // Types for refinements (kept for backward compatibility)
 interface Refinement {
@@ -312,31 +313,50 @@ ${researchContext}`
         system: buildSynthesisPrompt(currentUser, outputMode),
         messages: messagesWithContext,
         temperature: 0.3,
-        onFinish: async ({ text }) => {
-          // Generate and emit refinements
-          const refinementsData = generateSearchRefinements(researchResult.allIssues, lastUserMessage)
-          if (refinementsData) {
-            writer.write({
-              type: 'data-refinements',
-              id: generateId(),
-              data: refinementsData
-            })
-          }
-
-          // Generate and emit follow-up suggestions
-          const suggestions = generateFollowUpSuggestions(text, researchResult.allIssues)
-          if (suggestions.length > 0) {
-            writer.write({
-              type: 'data-suggestions',
-              id: generateId(),
-              data: { prompts: suggestions }
-            })
-          }
-        }
       })
 
-      // Merge the AI synthesis stream
-      writer.merge(result.toUIMessageStream())
+      // Stream the AI synthesis text using text-delta type
+      let fullText = ''
+      for await (const textPart of result.textStream) {
+        fullText += textPart
+        writer.write({ type: 'text-delta', id: generateId(), delta: textPart })
+      }
+
+      // Generate and emit refinements after synthesis completes
+      const refinementsData = generateSearchRefinements(researchResult.allIssues, lastUserMessage)
+      if (refinementsData) {
+        writer.write({
+          type: 'data-refinements',
+          id: generateId(),
+          data: refinementsData
+        })
+      }
+
+      // Generate and emit follow-up suggestions
+      const suggestions = generateFollowUpSuggestions(fullText, researchResult.allIssues)
+      if (suggestions.length > 0) {
+        writer.write({
+          type: 'data-suggestions',
+          id: generateId(),
+          data: { prompts: suggestions }
+        })
+      }
+
+      // Log this turn for evaluation (async, don't block response)
+      const conversationId = body.conversationId || generateId()
+      const turnIndex = messages.filter(m => m.role === 'user').length
+      const evalData = buildEvalLogData(
+        conversationId,
+        turnIndex,
+        lastUserMessage,
+        researchResult,
+        fullText,
+        modelId,
+        outputModeId
+      )
+      logEvaluation(evalData).catch(err => {
+        console.error('[Chat] Eval logging error:', err)
+      })
     }
   })
 

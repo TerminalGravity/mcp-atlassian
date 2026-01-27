@@ -132,45 +132,42 @@ export async function executeResearchPipeline(
   const classification = classifyQuery(query, currentUser)
   console.log('[Research] Classification:', classification)
 
-  // Phase 1: Initial Search (ALWAYS runs)
-  const phase1: ResearchPhase = {
-    id: generateId(),
-    name: classification.type === 'jql' ? 'JQL Search' : 'Semantic Search',
-    status: 'running',
-    toolName: classification.type === 'jql' ? 'jql_search' : 'semantic_search',
-    input: classification.type === 'jql'
-      ? { jql: classification.jqlQuery }
-      : { query: classification.semanticQuery },
+  // Phase 1: JQL Search (runs for 'jql' or 'hybrid' types)
+  // For temporal queries like "most recently updated", JQL with ORDER BY is essential
+  if ((classification.type === 'jql' || classification.type === 'hybrid') && classification.jqlQuery) {
+    const jqlPhase: ResearchPhase = {
+      id: generateId(),
+      name: 'JQL Search',
+      status: 'running',
+      toolName: 'jql_search',
+      input: { jql: classification.jqlQuery },
+    }
+    phases.push(jqlPhase)
+    streamPhase(writer, jqlPhase)
+
+    const jqlResult = await searchJQL(classification.jqlQuery, 20)
+    jqlPhase.status = jqlResult.error ? 'error' : 'complete'
+    jqlPhase.output = jqlResult
+    streamPhase(writer, jqlPhase)
+    addIssues(jqlResult.issues || [])
   }
-  phases.push(phase1)
-  streamPhase(writer, phase1)
 
-  // Execute initial search
-  const initialResult = classification.type === 'jql'
-    ? await searchJQL(classification.jqlQuery!, 15)
-    : await searchVectorStore(classification.semanticQuery!, 15)
-
-  phase1.status = initialResult.error ? 'error' : 'complete'
-  phase1.output = initialResult
-  streamPhase(writer, phase1)
-  addIssues(initialResult.issues || [])
-
-  // For hybrid queries, also run semantic search
-  if (classification.type === 'hybrid' && classification.semanticQuery) {
-    const phase1b: ResearchPhase = {
+  // Phase 2: Semantic Search (runs for 'semantic' or 'hybrid' types)
+  if ((classification.type === 'semantic' || classification.type === 'hybrid') && classification.semanticQuery) {
+    const semanticPhase: ResearchPhase = {
       id: generateId(),
       name: 'Semantic Search',
       status: 'running',
       toolName: 'semantic_search',
       input: { query: classification.semanticQuery },
     }
-    phases.push(phase1b)
-    streamPhase(writer, phase1b)
+    phases.push(semanticPhase)
+    streamPhase(writer, semanticPhase)
 
-    const semanticResult = await searchVectorStore(classification.semanticQuery, 10)
-    phase1b.status = semanticResult.error ? 'error' : 'complete'
-    phase1b.output = semanticResult
-    streamPhase(writer, phase1b)
+    const semanticResult = await searchVectorStore(classification.semanticQuery, 15)
+    semanticPhase.status = semanticResult.error ? 'error' : 'complete'
+    semanticPhase.output = semanticResult
+    streamPhase(writer, semanticPhase)
     addIssues(semanticResult.issues || [])
   }
 
