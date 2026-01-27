@@ -200,13 +200,36 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
   const parts = message.parts || []
 
   // Extract different part types
-  const toolParts = parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
+  // Handle both old tool-* format and new data-research-phase format
+  const oldToolParts = parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
     ...p,
     toolName: p.type.replace('tool-', ''),
     input: (p as { input?: unknown }).input,
     output: (p as { output?: unknown }).output,
     state: (p as { state?: string }).state,
   }))
+
+  // New research phase format from forced agent loop
+  const researchPhaseParts = parts.filter((p): p is {
+    type: 'data-research-phase'
+    id: string
+    data: {
+      toolName: string
+      input: Record<string, unknown>
+      output?: { issues?: JiraIssue[]; count?: number; error?: string }
+      state: string
+    }
+  } => p.type === 'data-research-phase').map(p => ({
+    ...p,
+    toolName: p.data.toolName,
+    input: p.data.input,
+    output: p.data.output,
+    state: p.data.state,
+  }))
+
+  // Combine both formats
+  const toolParts = [...oldToolParts, ...researchPhaseParts]
+
   const textParts = parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
   const textContent = textParts.map(p => p.text).join('')
 

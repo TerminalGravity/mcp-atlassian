@@ -17,6 +17,8 @@ from mcp_atlassian.vector.config import VectorConfig
 from mcp_atlassian.vector.embeddings import EmbeddingPipeline
 from mcp_atlassian.vector.scheduler import SyncScheduler
 from mcp_atlassian.vector.store import LanceDBStore
+from mcp_atlassian.web.mongo import check_connection as check_mongo, close_connection as close_mongo
+from mcp_atlassian.web.output_modes import router as output_modes_router, seed_default_templates
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,15 @@ async def lifespan(app: FastAPI):
     get_pipeline()
     get_openai()
 
+    # Initialize MongoDB and seed default templates
+    if check_mongo():
+        seeded = seed_default_templates()
+        if seeded > 0:
+            logger.info(f"Seeded {seeded} default output mode templates")
+        logger.info("MongoDB connected successfully")
+    else:
+        logger.warning("MongoDB not available - output modes will not work")
+
     # Start background sync scheduler
     config = VectorConfig.from_env()
     if config.sync_interval_minutes > 0:
@@ -89,6 +100,9 @@ async def lifespan(app: FastAPI):
     # Stop background sync scheduler
     if _scheduler:
         await _scheduler.stop()
+
+    # Close MongoDB connection
+    close_mongo()
     logger.info("Shutting down Jira Knowledge API server")
 
 
@@ -112,6 +126,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register output modes router
+app.include_router(output_modes_router)
 
 
 class SearchRequest(BaseModel):

@@ -35,6 +35,8 @@ dependencies = [
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "tenacity>=8.2.0",
+    # MongoDB for output modes
+    "pymongo>=4.6.0",
 ]
 
 [project.optional-dependencies]

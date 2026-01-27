@@ -1,6 +1,6 @@
 "use client"
 
-import { useChat, type UIMessage } from "@ai-sdk/react"
+import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import { useRef, useEffect, useState, useMemo, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
@@ -10,8 +10,12 @@ import { ChatMessage } from "./chat-message"
 import { ChatInput } from "./chat-input"
 import { StarterPrompts } from "./starter-prompts"
 import { ConversationSidebar } from "./conversation-sidebar"
-import { Loader2, ChevronDown, PanelLeftClose, PanelLeft, AlertCircle, X } from "lucide-react"
+import { OutputModeSelector } from "./output-mode-selector"
+import { OutputModeEditor } from "@/components/settings/output-mode-editor"
+import { Loader2, ChevronDown, PanelLeft, AlertCircle, X, Sparkles } from "lucide-react"
 import { useUser } from "@/contexts/user-context"
+import { useOutputMode } from "@/contexts/output-mode-context"
+import type { OutputMode } from "@/lib/api"
 import {
   getAllConversationMetas,
   getConversation,
@@ -38,6 +42,10 @@ export function ChatContainer() {
   const [showModelMenu, setShowModelMenu] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const { currentUser } = useUser()
+  const { selectedMode, autoDetectEnabled, detectModeForQuery } = useOutputMode()
+  const [showModeEditor, setShowModeEditor] = useState(false)
+  const [activeQueryMode, setActiveQueryMode] = useState<OutputMode | null>(null)
+  const [modeToast, setModeToast] = useState<{ mode: string; isAuto: boolean } | null>(null)
 
   // Conversation management
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
@@ -53,16 +61,19 @@ export function ChatContainer() {
     transport,
   })
 
-  // Local error state for UI display
-  const [chatError, setChatError] = useState<string | null>(null)
+  // Track dismissed errors to avoid re-showing them
+  const [dismissedErrorId, setDismissedErrorId] = useState<string | null>(null)
 
-  // Watch for useChat errors
-  useEffect(() => {
-    if (error) {
-      console.error("[chat] Error:", error)
-      setChatError(error.message || "Failed to get response. Please try again.")
-    }
-  }, [error])
+  // Compute display error - show error unless it's been dismissed
+  const errorId = error ? `${error.name}-${error.message}` : null
+  const chatError = error && errorId !== dismissedErrorId
+    ? (error.message || "Failed to get response. Please try again.")
+    : null
+
+  // Log errors when they occur
+  if (error && errorId !== dismissedErrorId) {
+    console.error("[chat] Error:", error)
+  }
 
   // Initialize: migrate old storage and load conversations
   useEffect(() => {
@@ -216,16 +227,61 @@ export function ChatContainer() {
     }
   }, [showModelMenu])
 
-  const onSend = (content: string) => {
+  const onSend = async (content: string) => {
     setShowStarters(false)
-    setChatError(null) // Clear any previous error
-    sendMessage({ text: content }, { body: { model: selectedModel, currentUser: currentUser.id } })
+    setDismissedErrorId(null) // Reset to show any new errors
+    setModeToast(null)
+
+    // Detect mode if auto-detect is enabled
+    const modeForQuery = autoDetectEnabled
+      ? await detectModeForQuery(content)
+      : selectedMode
+
+    // Track the active mode and show toast if auto-detected
+    setActiveQueryMode(modeForQuery)
+    if (autoDetectEnabled && modeForQuery && modeForQuery.id !== selectedMode?.id) {
+      setModeToast({ mode: modeForQuery.display_name, isAuto: true })
+      // Auto-hide toast after 3 seconds
+      setTimeout(() => setModeToast(null), 3000)
+    }
+
+    sendMessage(
+      { text: content },
+      {
+        body: {
+          model: selectedModel,
+          currentUser: currentUser.id,
+          outputModeId: modeForQuery?.id || null,
+        },
+      }
+    )
   }
 
-  const handleStarterSelect = (prompt: string) => {
+  const handleStarterSelect = async (prompt: string) => {
     setShowStarters(false)
-    setChatError(null) // Clear any previous error
-    sendMessage({ text: prompt }, { body: { model: selectedModel, currentUser: currentUser.id } })
+    setDismissedErrorId(null) // Reset to show any new errors
+    setModeToast(null)
+
+    const modeForQuery = autoDetectEnabled
+      ? await detectModeForQuery(prompt)
+      : selectedMode
+
+    setActiveQueryMode(modeForQuery)
+    if (autoDetectEnabled && modeForQuery && modeForQuery.id !== selectedMode?.id) {
+      setModeToast({ mode: modeForQuery.display_name, isAuto: true })
+      setTimeout(() => setModeToast(null), 3000)
+    }
+
+    sendMessage(
+      { text: prompt },
+      {
+        body: {
+          model: selectedModel,
+          currentUser: currentUser.id,
+          outputModeId: modeForQuery?.id || null,
+        },
+      }
+    )
   }
 
   return (
@@ -257,6 +313,9 @@ export function ChatContainer() {
               </Button>
             )}
           </div>
+
+          {/* Output Mode Selector */}
+          <OutputModeSelector onManageModes={() => setShowModeEditor(true)} />
 
           <div className="relative" data-dropdown>
             <button
@@ -318,7 +377,7 @@ export function ChatContainer() {
               <ChatMessage key={`${message.id}-${index}`} message={message} onSendMessage={onSend} />
             ))}
 
-            {/* Loading indicator */}
+            {/* Loading indicator with active mode */}
             <AnimatePresence>
               {isLoading && (
                 <motion.div
@@ -330,7 +389,7 @@ export function ChatContainer() {
                   <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
                     <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col gap-1">
                     <motion.div
                       animate={{ opacity: [0.5, 1, 0.5] }}
                       transition={{ duration: 1.5, repeat: Infinity }}
@@ -338,7 +397,30 @@ export function ChatContainer() {
                     >
                       Searching Jira knowledge base...
                     </motion.div>
+                    {activeQueryMode && (
+                      <div className="flex items-center gap-1.5 text-[10px] text-violet-500">
+                        <Sparkles className="w-3 h-3" />
+                        <span>Formatting as {activeQueryMode.display_name}</span>
+                      </div>
+                    )}
                   </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Mode auto-detect toast */}
+            <AnimatePresence>
+              {modeToast && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full bg-violet-500/10 border border-violet-500/20 shadow-lg backdrop-blur-sm"
+                >
+                  <Sparkles className="w-4 h-4 text-violet-500" />
+                  <span className="text-sm font-medium text-violet-700 dark:text-violet-300">
+                    Auto-detected: {modeToast.mode}
+                  </span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -360,7 +442,7 @@ export function ChatContainer() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setChatError(null)}
+                    onClick={() => setDismissedErrorId(errorId)}
                     className="h-6 w-6 p-0 text-destructive/60 hover:text-destructive"
                   >
                     <X className="w-4 h-4" />
@@ -385,6 +467,12 @@ export function ChatContainer() {
           </div>
         </motion.div>
       </div>
+
+      {/* Output Mode Editor Modal */}
+      <OutputModeEditor
+        isOpen={showModeEditor}
+        onClose={() => setShowModeEditor(false)}
+      />
     </div>
   )
 }

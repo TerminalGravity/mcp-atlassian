@@ -1,9 +1,11 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { Send, Square } from "lucide-react"
+import { Send, Square, Sparkles } from "lucide-react"
+import { useOutputMode } from "@/contexts/output-mode-context"
+import { motion, AnimatePresence } from "framer-motion"
 
 interface ChatInputProps {
   onSend: (message: string) => void
@@ -15,6 +17,7 @@ interface ChatInputProps {
 export function ChatInput({ onSend, onStop, isLoading, placeholder = "Ask about Jira issues..." }: ChatInputProps) {
   const [input, setInput] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const { modes, selectedMode, autoDetectEnabled } = useOutputMode()
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -22,6 +25,33 @@ export function ChatInput({ onSend, onStop, isLoading, placeholder = "Ask about 
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`
     }
   }, [input])
+
+  // Simple client-side mode preview (matches backend logic loosely)
+  const previewMode = useMemo(() => {
+    if (!autoDetectEnabled || !input.trim() || input.length < 3) {
+      return selectedMode
+    }
+    const lower = input.toLowerCase()
+    for (const mode of modes) {
+      // Check keywords
+      for (const keyword of mode.query_patterns.keywords) {
+        if (lower.includes(keyword.toLowerCase())) {
+          return mode
+        }
+      }
+      // Check regex patterns
+      for (const pattern of mode.query_patterns.regex) {
+        try {
+          if (new RegExp(pattern, "i").test(lower)) {
+            return mode
+          }
+        } catch {
+          // Invalid regex, skip
+        }
+      }
+    }
+    return selectedMode
+  }, [input, modes, selectedMode, autoDetectEnabled])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -75,9 +105,27 @@ export function ChatInput({ onSend, onStop, isLoading, placeholder = "Ask about 
           </Button>
         )}
       </div>
-      <p className="mt-2 text-center text-xs text-muted-foreground">
-        Press Enter to send, Shift+Enter for new line
-      </p>
+      <div className="mt-2 flex items-center justify-center gap-2">
+        <AnimatePresence mode="wait">
+          {input.trim().length >= 3 && previewMode && autoDetectEnabled && (
+            <motion.div
+              key={previewMode.id}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
+              className="flex items-center gap-1.5 text-[10px] text-violet-600 dark:text-violet-400"
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>Will format as: <strong>{previewMode.display_name}</strong></span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {(!input.trim() || input.trim().length < 3 || !autoDetectEnabled) && (
+          <p className="text-[10px] text-muted-foreground">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        )}
+      </div>
     </form>
   )
 }

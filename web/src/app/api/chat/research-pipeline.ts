@@ -85,18 +85,18 @@ async function getLinkedIssues(issueKey: string): Promise<{ issues: JiraIssue[];
 
 /**
  * Stream a research phase update to the client.
+ * Uses data-research-phase custom type which the UI will render.
  */
 function streamPhase(writer: UIMessageStreamWriter, phase: ResearchPhase) {
-  // Use tool-invocation format so the UI can render it properly
-  const toolType = `tool-${phase.toolName}` as const
-
   writer.write({
-    type: toolType,
+    type: 'data-research-phase',
     id: phase.id,
-    // @ts-expect-error - AI SDK types don't include all our custom fields
-    input: phase.input,
-    output: phase.output,
-    state: phase.status === 'complete' || phase.status === 'error' ? 'output-available' : 'partial',
+    data: {
+      toolName: phase.toolName,
+      input: phase.input,
+      output: phase.output,
+      state: phase.status === 'complete' || phase.status === 'error' ? 'output-available' : 'partial',
+    },
   })
 }
 

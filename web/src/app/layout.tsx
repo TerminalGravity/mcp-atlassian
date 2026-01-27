@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { UserProvider } from "@/contexts/user-context";
+import { OutputModeProvider } from "@/contexts/output-mode-context";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Nav } from "@/components/layout/nav";
 
@@ -32,8 +33,10 @@ export default function RootLayout({
       >
         <ThemeProvider>
           <UserProvider>
-            <Nav />
-            {children}
+            <OutputModeProvider>
+              <Nav />
+              {children}
+            </OutputModeProvider>
           </UserProvider>
         </ThemeProvider>
       </body>
