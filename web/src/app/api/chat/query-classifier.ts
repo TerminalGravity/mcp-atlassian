@@ -160,8 +160,10 @@ function buildJqlFromQuery(query: string, currentUser: string): string {
   const filterParts = parts.filter(p => !p.startsWith('ORDER'))
   const orderPart = parts.find(p => p.startsWith('ORDER')) || 'ORDER BY updated DESC'
 
+  // JQL requires at least one filter - add a time window if none exist
   if (filterParts.length === 0) {
-    return orderPart
+    // Default to last 30 days for cross-project "most recently updated" queries
+    return `updated >= -30d ${orderPart}`
   }
   return `${filterParts.join(' AND ')} ${orderPart}`
 }

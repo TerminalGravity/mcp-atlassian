@@ -119,7 +119,7 @@ async def log_turn(request: EvalLogRequest) -> EvalLogResponse:
         )
     except Exception as e:
         logger.error(f"Failed to log turn: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/runs", response_model=EvalRunResponse)
@@ -168,7 +168,7 @@ async def start_run(
         )
     except Exception as e:
         logger.error(f"Failed to start evaluation run: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/runs/{run_id}", response_model=EvalRunStatusResponse)
@@ -218,7 +218,7 @@ async def get_metrics(days: int = 30) -> MetricsResponse:
         )
     except Exception as e:
         logger.error(f"Failed to get metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/pending")
