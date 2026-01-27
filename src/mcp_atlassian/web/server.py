@@ -337,9 +337,10 @@ async def vector_search(request: VectorSearchRequest):
         results, total_count = store.search_issues(query_vector, limit=request.limit)
         logger.info(f"Vector search returned {len(results)} results (total matching: {total_count})")
 
-        # Format results
-        issues = [
-            {
+        # Format results with timestamps for temporal filtering
+        issues = []
+        for r in results:
+            issue = {
                 "issue_id": r.get("issue_id", ""),
                 "summary": r.get("summary", ""),
                 "status": r.get("status", "Unknown"),
@@ -350,8 +351,14 @@ async def vector_search(request: VectorSearchRequest):
                 "labels": r.get("labels", []),
                 "score": max(0.0, min(1.0, r.get("score", 0.0))),
             }
-            for r in results
-        ]
+            # Include timestamps if available (for temporal filtering)
+            if r.get("created_at"):
+                created = r.get("created_at")
+                issue["created_at"] = created.isoformat() if hasattr(created, 'isoformat') else str(created)
+            if r.get("updated_at"):
+                updated = r.get("updated_at")
+                issue["updated_at"] = updated.isoformat() if hasattr(updated, 'isoformat') else str(updated)
+            issues.append(issue)
 
         return {"issues": issues, "count": len(issues)}
 
@@ -400,7 +407,7 @@ async def jql_search(request: JQLSearchRequest):
         # Use the search method from JiraFacade - returns JiraSearchResult
         result = jira.search_issues(jql, limit=request.limit)
 
-        # Format results to match vector search format
+        # Format results to match vector search format (including timestamps for temporal filtering)
         issues = []
         for issue in result.issues:
             # Extract nested object values
@@ -409,7 +416,7 @@ async def jql_search(request: JQLSearchRequest):
             assignee_name = issue.assignee.display_name if issue.assignee else None
             project_key = issue.project.key if issue.project else issue.key.split("-")[0]
 
-            issues.append({
+            issue_data = {
                 "issue_id": issue.key,
                 "summary": issue.summary,
                 "status": status_name,
@@ -419,7 +426,13 @@ async def jql_search(request: JQLSearchRequest):
                 "description_preview": issue.description[:300] if issue.description else None,
                 "labels": issue.labels or [],
                 "score": 1.0,  # JQL results are exact matches
-            })
+            }
+            # Include timestamps for temporal filtering
+            if issue.created:
+                issue_data["created_at"] = issue.created
+            if issue.updated:
+                issue_data["updated_at"] = issue.updated
+            issues.append(issue_data)
 
         return {"issues": issues, "count": len(issues)}
 
@@ -486,7 +499,7 @@ async def get_linked_issues(request: LinkedIssuesRequest):
         jql = f"key in ({','.join(linked_keys)})"
         result = jira.search_issues(jql, limit=20)
 
-        # Format results
+        # Format results with timestamps for temporal filtering
         issues = []
         for iss in result.issues:
             status_name = iss.status.name if iss.status else "Unknown"
@@ -494,7 +507,7 @@ async def get_linked_issues(request: LinkedIssuesRequest):
             assignee_name = iss.assignee.display_name if iss.assignee else None
             project_key = iss.project.key if iss.project else iss.key.split("-")[0]
 
-            issues.append({
+            issue_data = {
                 "issue_id": iss.key,
                 "summary": iss.summary,
                 "status": status_name,
@@ -503,7 +516,13 @@ async def get_linked_issues(request: LinkedIssuesRequest):
                 "assignee": assignee_name,
                 "description_preview": iss.description[:300] if iss.description else None,
                 "score": 1.0,
-            })
+            }
+            # Include timestamps for temporal filtering
+            if iss.created:
+                issue_data["created_at"] = iss.created
+            if iss.updated:
+                issue_data["updated_at"] = iss.updated
+            issues.append(issue_data)
 
         return {"issues": issues, "count": len(issues)}
 

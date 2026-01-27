@@ -298,9 +298,9 @@ export function ChatContainer() {
       />
 
       {/* Main Chat Area */}
-      <div className="flex flex-col flex-1 min-w-0">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-background/50">
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* Header - sticky at top */}
+        <div className="sticky top-0 z-20 flex items-center justify-between gap-2 px-4 py-2 border-b bg-background/95 backdrop-blur-sm">
           <div className="flex items-center gap-2">
             {!sidebarOpen && (
               <Button
@@ -356,8 +356,8 @@ export function ChatContainer() {
           </div>
         </div>
 
-        {/* Messages */}
-        <ScrollArea className="flex-1 px-6" ref={scrollRef}>
+        {/* Messages - scrollable area */}
+        <ScrollArea className="flex-1 overflow-y-auto px-6" ref={scrollRef}>
           <div className="py-4 space-y-1 max-w-4xl mx-auto">
             {/* Starter Prompts */}
             <AnimatePresence>
@@ -453,11 +453,11 @@ export function ChatContainer() {
           </div>
         </ScrollArea>
 
-        {/* Input */}
+        {/* Input - sticky at bottom */}
         <motion.div
           initial={{ y: 20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          className="px-6 py-4 border-t bg-background/95 backdrop-blur"
+          className="sticky bottom-0 z-20 px-6 py-4 border-t bg-background/95 backdrop-blur-sm"
         >
           <div className="max-w-4xl mx-auto">
             <ChatInput onSend={onSend} onStop={stop} isLoading={isLoading} />

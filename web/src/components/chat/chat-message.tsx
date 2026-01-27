@@ -5,16 +5,13 @@ import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Avatar } from "@/components/ui/avatar"
 import type { UIMessage } from "ai"
-import { Bot, User, Search, Database, GitBranch, Link2 } from "lucide-react"
+import { Bot, User } from "lucide-react"
 import { Streamdown } from "streamdown"
 import { SuggestionChips } from "./suggestion-chips"
 import { Reasoning } from "./reasoning"
+import { ResearchSteps } from "./research-steps"
 // AI Elements integration - using standardized components
 import { ContextJiraCard } from "@/components/ai-elements/context"
-import {
-  ChainOfThoughtCard,
-  type StepStatus,
-} from "@/components/ai-elements/chain-of-thought"
 import {
   CitationBadge,
   type CitationSource,
@@ -39,6 +36,9 @@ interface JiraIssue {
   description_preview?: string | null
   labels?: string[]
   score: number
+  // Timestamps for temporal filtering
+  created_at?: string
+  updated_at?: string
 }
 
 // Parse text for citation references like [1], [2], [1, 2]
@@ -126,91 +126,22 @@ function TextWithCitations({
   )
 }
 
-// Tool configuration for display
-const toolDisplayConfig: Record<string, { icon: typeof Search; label: string }> = {
-  semantic_search: { icon: Search, label: "Semantic Search" },
-  jql_search: { icon: Database, label: "JQL Query" },
-  get_epic_children: { icon: GitBranch, label: "Epic Children" },
-  get_linked_issues: { icon: Link2, label: "Linked Issues" },
-}
-
-// Convert tool parts to ChainOfThought steps format
-function toolPartsToSteps(toolParts: Array<{
-  toolName: string
-  input?: { query?: string; jql?: string; epicKey?: string; issueKey?: string }
-  output?: { issues?: JiraIssue[]; error?: string }
-  state?: string
-}>): Array<{
-  id: string
-  label: string
-  description?: string
-  status: StepStatus
-  icon?: React.ReactNode
-  results?: Array<{ id: string; label: string; href?: string }>
-}> {
-  return toolParts.map((tool, index) => {
-    const config = toolDisplayConfig[tool.toolName] || { icon: Search, label: tool.toolName }
-    const Icon = config.icon
-    const isComplete = tool.state === "output-available"
-    const hasError = !!tool.output?.error
-    const issues = tool.output?.issues || []
-
-    // Build description from input
-    let description = ""
-    if (tool.input?.query) {
-      description = `"${tool.input.query.slice(0, 50)}${tool.input.query.length > 50 ? '...' : ''}"`
-    } else if (tool.input?.jql) {
-      description = tool.input.jql.slice(0, 50) + (tool.input.jql.length > 50 ? '...' : '')
-    } else if (tool.input?.epicKey) {
-      description = tool.input.epicKey
-    } else if (tool.input?.issueKey) {
-      description = tool.input.issueKey
-    }
-
-    // Determine status
-    let status: StepStatus = "pending"
-    if (isComplete) {
-      status = "complete"
-    } else if (index === 0 || toolParts[index - 1]?.state === "output-available") {
-      status = "active"
-    }
-
-    // Build results for complete steps (show issue keys as badges)
-    const results = isComplete && !hasError && issues.length > 0
-      ? issues.slice(0, 5).map(issue => ({
-          id: issue.issue_id,
-          label: issue.issue_id,
-          href: `https://alldigitalrewards.atlassian.net/browse/${issue.issue_id}`,
-        }))
-      : undefined
-
-    return {
-      id: `${tool.toolName}-${index}`,
-      label: hasError ? `${config.label} (Error)` : `${config.label}${issues.length > 0 ? ` - ${issues.length} results` : ''}`,
-      description: hasError ? tool.output?.error : description,
-      status,
-      icon: <Icon className="size-3.5" />,
-      results,
-    }
-  })
-}
 
 export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
   const isUser = message.role === "user"
   const parts = message.parts || []
 
-  // Extract different part types
-  // Handle both old tool-* format and new data-research-phase format
-  const oldToolParts = parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
-    ...p,
-    toolName: p.type.replace('tool-', ''),
-    input: (p as { input?: unknown }).input,
-    output: (p as { output?: unknown }).output,
-    state: (p as { state?: string }).state,
-  }))
+  // Extract research phases - prefer new data-research-phase format, fall back to old tool-* format
+  // Deduplicate by ID, keeping only the latest version (phases are streamed twice: running then complete)
+  const researchPhaseMap = new Map<string, {
+    id: string
+    toolName: string
+    input: Record<string, unknown>
+    output?: { issues?: JiraIssue[]; count?: number; error?: string }
+    state: string
+  }>()
 
-  // New research phase format from forced agent loop
-  const researchPhaseParts = parts.filter((p): p is {
+  parts.filter((p): p is {
     type: 'data-research-phase'
     id: string
     data: {
@@ -219,16 +150,32 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
       output?: { issues?: JiraIssue[]; count?: number; error?: string }
       state: string
     }
-  } => p.type === 'data-research-phase').map(p => ({
-    ...p,
-    toolName: p.data.toolName,
-    input: p.data.input,
-    output: p.data.output,
-    state: p.data.state,
-  }))
+  } => p.type === 'data-research-phase').forEach(p => {
+    // Later entries (complete state) overwrite earlier ones (running state)
+    researchPhaseMap.set(p.id, {
+      id: p.id,
+      toolName: p.data.toolName,
+      input: p.data.input,
+      output: p.data.output,
+      state: p.data.state,
+    })
+  })
 
-  // Combine both formats
-  const toolParts = [...oldToolParts, ...researchPhaseParts]
+  const researchPhaseParts = Array.from(researchPhaseMap.values())
+
+  // Only use old tool-* format if no new format parts exist (backwards compatibility)
+  const oldToolParts = researchPhaseParts.length === 0
+    ? parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
+        id: undefined as string | undefined,
+        toolName: p.type.replace('tool-', ''),
+        input: (p as { input?: unknown }).input as Record<string, unknown> | undefined,
+        output: (p as { output?: unknown }).output as { issues?: JiraIssue[]; count?: number; error?: string } | undefined,
+        state: (p as { state?: string }).state,
+      }))
+    : []
+
+  // Use whichever format is present (they're mutually exclusive now)
+  const toolParts = researchPhaseParts.length > 0 ? researchPhaseParts : oldToolParts
 
   const textParts = parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
   const textContent = textParts.map(p => p.text).join('')
@@ -299,15 +246,10 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
       </Avatar>
 
       <div className={cn("flex-1 space-y-3 min-w-0", isUser && "text-right")}>
-        {/* Research steps using ChainOfThought ai-element */}
+        {/* Research steps - inline expandable with full issue cards */}
         {!isUser && toolParts.length > 0 && (
-          <ChainOfThoughtCard
-            steps={toolPartsToSteps(toolParts.map(t => ({
-              toolName: t.toolName,
-              input: t.input as { query?: string; jql?: string; epicKey?: string; issueKey?: string } | undefined,
-              output: t.output as { issues?: JiraIssue[]; error?: string } | undefined,
-              state: t.state,
-            })))}
+          <ResearchSteps
+            phases={toolParts}
             isStreaming={toolParts.some(t => t.state !== "output-available")}
             defaultOpen={false}
           />

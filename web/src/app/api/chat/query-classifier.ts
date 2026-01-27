@@ -16,6 +16,8 @@ const JQL_PATTERNS = [
   /\b(my|assigned to me)\s+(issues?|bugs?|tasks?)/i,
   /\b(in progress|backlog|done|to do)\b/i,
   /\b(recent|updated|created)\s+(this week|today|yesterday|-\d+d)/i,
+  /\b(most )?(recently|latest) (updated|created|modified)/i,  // "most recently updated", "latest created"
+  /\b(last|past)\s+\d+\s+(days?|weeks?|months?)/i,  // "last 7 days", "past 2 weeks"
   /\bstatus\s*[=:]/i,
   /\bassignee\s*[=:]/i,
   /\bproject\s*[=:]/i,
@@ -94,8 +96,10 @@ function buildJqlFromQuery(query: string, currentUser: string): string {
   const parts: string[] = []
   const q = query.toLowerCase()
 
-  // Project filter (default to DS)
-  parts.push('project = DS')
+  // Project filter - only add if NOT asking for "all projects"
+  if (!/\b(all|every|any)\s+projects?\b/i.test(q) && !/\bacross\s+(all\s+)?projects?\b/i.test(q)) {
+    parts.push('project = DS')
+  }
 
   // Issue type detection
   if (/bugs?/i.test(q)) {
@@ -131,12 +135,32 @@ function buildJqlFromQuery(query: string, currentUser: string): string {
     parts.push('updated >= -1d')
   } else if (/\bthis week\b/i.test(q)) {
     parts.push('updated >= startOfWeek()')
+  } else if (/\b(last|past)\s+(\d+)\s+days?\b/i.test(q)) {
+    const match = q.match(/\b(last|past)\s+(\d+)\s+days?\b/i)
+    if (match) parts.push(`updated >= -${match[2]}d`)
+  } else if (/\b(last|past)\s+(\d+)\s+weeks?\b/i.test(q)) {
+    const match = q.match(/\b(last|past)\s+(\d+)\s+weeks?\b/i)
+    if (match) parts.push(`updated >= -${parseInt(match[2]) * 7}d`)
+  } else if (/\b(most )?(recently|latest)\s+(updated|modified)\b/i.test(q)) {
+    // "most recently updated" - just order by updated, don't filter
+    // (let ORDER BY handle it)
   } else if (/\brecent(ly)?\b/i.test(q)) {
     parts.push('updated >= -7d')
   }
 
-  // Order by most recently updated
-  parts.push('ORDER BY updated DESC')
+  // Determine ordering
+  if (/\b(created|newest|oldest)\b/i.test(q) && !/updated/i.test(q)) {
+    parts.push('ORDER BY created DESC')
+  } else {
+    parts.push('ORDER BY updated DESC')
+  }
 
-  return parts.join(' AND ').replace(' AND ORDER', ' ORDER')
+  // Build final JQL
+  const filterParts = parts.filter(p => !p.startsWith('ORDER'))
+  const orderPart = parts.find(p => p.startsWith('ORDER')) || 'ORDER BY updated DESC'
+
+  if (filterParts.length === 0) {
+    return orderPart
+  }
+  return `${filterParts.join(' AND ')} ${orderPart}`
 }

@@ -17,6 +17,9 @@ export interface JiraIssue {
   description_preview?: string | null
   labels?: string[]
   score: number
+  // Timestamps for temporal filtering
+  created_at?: string
+  updated_at?: string
 }
 
 export interface ResearchPhase {
@@ -254,7 +257,7 @@ export function buildResearchContext(result: ResearchResult): string {
     byType.get(type)!.push(issue)
   }
 
-  // Format issues by type
+  // Format issues by type (including timestamps for temporal analysis)
   for (const [type, issues] of byType.entries()) {
     parts.push(`### ${type}s (${issues.length})`)
     parts.push('')
@@ -262,7 +265,16 @@ export function buildResearchContext(result: ResearchResult): string {
       const assignee = issue.assignee || 'Unassigned'
       const preview = issue.description_preview?.slice(0, 200) || ''
       parts.push(`**[${issue.issue_id}] ${issue.summary}**`)
-      parts.push(`Status: ${issue.status} | Assignee: ${assignee}`)
+      // Include timestamps when available for accurate temporal filtering
+      const timestamps: string[] = []
+      if (issue.updated_at) {
+        timestamps.push(`Updated: ${issue.updated_at}`)
+      }
+      if (issue.created_at) {
+        timestamps.push(`Created: ${issue.created_at}`)
+      }
+      const timestampStr = timestamps.length > 0 ? ` | ${timestamps.join(' | ')}` : ''
+      parts.push(`Status: ${issue.status} | Assignee: ${assignee}${timestampStr}`)
       if (preview) {
         parts.push(`> ${preview}...`)
       }
