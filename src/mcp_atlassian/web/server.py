@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -117,15 +118,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS for local development
+# CORS - configurable via CORS_ORIGINS env var (comma-separated)
+_default_origins = "http://localhost:3000,http://localhost:3006,http://127.0.0.1:3000,http://127.0.0.1:3006"
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", _default_origins).split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3006",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3006",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -553,8 +552,9 @@ def main():
     uvicorn.run(
         "mcp_atlassian.web.server:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
+        port=int(os.getenv("PORT", "8000")),
+        reload=os.getenv("RELOAD", "").lower() == "true",
+        workers=int(os.getenv("WORKERS", "1")),
     )
 
 

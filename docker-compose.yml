@@ -45,6 +45,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      target: development
     ports:
       - "3000:3000"
     env_file:

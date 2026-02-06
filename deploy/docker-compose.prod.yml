@@ -1,0 +1,89 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+      - AUTH_USER=${AUTH_USER}
+      - AUTH_HASH=${AUTH_HASH}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: jira_knowledge
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-jira}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    volumes:
+      - lancedb_data:/app/data/lancedb
+    env_file:
+      - .env
+    environment:
+      - VECTOR_DB_PATH=/app/data/lancedb
+      - PYTHONUNBUFFERED=1
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-jira}:${MONGO_PASSWORD}@mongodb:27017/jira_knowledge?authSource=admin
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://${DOMAIN}}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  frontend:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+      target: production
+      args:
+        - NEXT_PUBLIC_API_URL=https://${DOMAIN}
+    restart: unless-stopped
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  mongodb_data:
+  lancedb_data:
+  caddy_data:
+  caddy_config:

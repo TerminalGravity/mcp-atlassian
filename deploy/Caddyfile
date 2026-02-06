@@ -1,0 +1,14 @@
+# Set DOMAIN to a real domain (e.g. jira.example.com) for automatic HTTPS.
+# Using localhost (the default) serves HTTP only.
+{$DOMAIN:localhost} {
+	# Basic auth for all routes
+	basicauth * {
+		{$AUTH_USER:admin} {$AUTH_HASH}
+	}
+
+	# Backend API
+	reverse_proxy /api/* backend:8000
+
+	# Frontend (Next.js)
+	reverse_proxy frontend:3000
+}
