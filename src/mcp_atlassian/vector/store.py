@@ -212,18 +212,14 @@ class LanceDBStore:
         """
         try:
             if project_key:
-                # Delete issues for specific project
-                # Try to get count, but don't fail if unavailable
+                # Count only this project's rows before deleting
                 try:
-                    count = self.issues_table.count_rows()
+                    deleted = self.issues_table.count_rows(
+                        f"project_key = '{project_key}'"
+                    )
                 except Exception:
-                    count = 0
+                    deleted = 0
                 self.issues_table.delete(f"project_key = '{project_key}'")
-                try:
-                    new_count = self.issues_table.count_rows()
-                    deleted = count - new_count
-                except Exception:
-                    deleted = count  # Assume all deleted
             else:
                 # Delete all issues
                 try:

@@ -668,12 +668,16 @@ function SyncManagementTab() {
     loadData()
   }, [loadData])
 
-  // Poll while sync is running
+  // Poll while sync is running — fast polling for responsive UI
   useEffect(() => {
     if (!syncRunning) return
     const interval = setInterval(async () => {
       try {
-        const status = await fetchSyncStatus()
+        const [status, healthData] = await Promise.all([
+          fetchSyncStatus(),
+          fetchSystemHealth(),
+        ])
+        setHealth(healthData)
         setSyncRunning(status.running)
         if (!status.running) {
           loadData()
@@ -682,7 +686,7 @@ function SyncManagementTab() {
       } catch {
         // Ignore polling errors
       }
-    }, 5_000)
+    }, 2_000)
     return () => clearInterval(interval)
   }, [syncRunning, loadData])
 
@@ -733,6 +737,7 @@ function SyncManagementTab() {
 
   const handleFullSync = useCallback(async () => {
     setSyncRunning(true)
+    setError(null)
     try {
       const projectKeys =
         selectedProjects.size > 0
@@ -774,7 +779,29 @@ function SyncManagementTab() {
         .map(([k, v]) => `${k}: ${v}`)
         .join(", ")
       setClearResult(`Cleared ${result.total} issues (${details})`)
-      await loadData()
+
+      // Optimistic update: immediately zero out cleared projects in health state
+      setHealth((prev) => {
+        if (!prev) return prev
+        const updatedCounts = { ...prev.vector_store.project_counts }
+        let removedTotal = 0
+        for (const key of selectedProjects) {
+          removedTotal += updatedCounts[key] ?? 0
+          delete updatedCounts[key]
+        }
+        return {
+          ...prev,
+          vector_store: {
+            ...prev.vector_store,
+            total_issues: Math.max(0, prev.vector_store.total_issues - removedTotal),
+            project_counts: updatedCounts,
+            projects: prev.vector_store.projects.filter((p) => !selectedProjects.has(p)),
+          },
+        }
+      })
+
+      // Also refresh from server for accuracy
+      loadData()
     } catch (err) {
       setClearResult(
         err instanceof Error ? err.message : "Clear failed"
@@ -1100,11 +1127,23 @@ function SyncManagementTab() {
         {/* RIGHT: Current Index */}
         <div className="space-y-4">
           {/* Project Distribution */}
-          <Card>
+          <Card className={`transition-opacity duration-300 ${clearing ? "opacity-50" : ""}`}>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <FolderKanban className="h-4 w-4" />
                 Index Distribution
+                {syncRunning && (
+                  <span className="ml-auto flex items-center gap-1.5 text-[10px] font-normal text-amber-600 dark:text-amber-400">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Updating...
+                  </span>
+                )}
+                {clearing && (
+                  <span className="ml-auto flex items-center gap-1.5 text-[10px] font-normal text-destructive">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Clearing...
+                  </span>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -1172,10 +1211,13 @@ function SyncManagementTab() {
                 </span>
               </KVRow>
               <KVRow label="Total Records">
-                <span className="tabular-nums">
+                <span className="tabular-nums flex items-center gap-1.5">
                   {formatNumber(
                     health.vector_store.total_issues +
                       health.vector_store.total_comments
+                  )}
+                  {syncRunning && (
+                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                   )}
                 </span>
               </KVRow>
@@ -1212,11 +1254,28 @@ function SyncManagementTab() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Activity className="h-4 w-4" />
-                Last Sync Result
+                {syncRunning ? "Sync Progress" : "Last Sync Result"}
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {health.sync.last_result ? (
+              {syncRunning ? (
+                <div className="space-y-3">
+                  <SyncProgressBar running />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1.5">
+                      <StatusDot active color="yellow" />
+                      Syncing...
+                    </span>
+                    <span className="tabular-nums">{formatDuration(syncElapsed)}</span>
+                  </div>
+                  {health.sync.last_result && (
+                    <div className="pt-2 border-t">
+                      <p className="text-[10px] text-muted-foreground mb-1.5">Live progress</p>
+                      <SyncResultBar result={health.sync.last_result} />
+                    </div>
+                  )}
+                </div>
+              ) : health.sync.last_result ? (
                 <SyncResultBar result={health.sync.last_result} />
               ) : (
                 <p className="text-xs text-muted-foreground">
