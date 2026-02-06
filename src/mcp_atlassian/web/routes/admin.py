@@ -210,12 +210,15 @@ async def _run_full_sync(
 ) -> None:
     """Run full sync in background."""
     global _active_sync_engine
+    scheduler = get_scheduler()
     try:
         from mcp_atlassian.vector.sync import VectorSyncEngine
 
         jira = get_jira()
         engine = VectorSyncEngine(jira)
         _active_sync_engine = engine
+        if scheduler:
+            scheduler._syncing = True
         await engine.full_sync(
             projects=projects, start_date=start_date, end_date=end_date
         )
@@ -223,6 +226,8 @@ async def _run_full_sync(
         logger.error(f"Background full sync failed: {e}", exc_info=True)
     finally:
         _active_sync_engine = None
+        if scheduler:
+            scheduler._syncing = False
 
 
 @router.post("/sync/full")
@@ -266,8 +271,16 @@ class SyncPreviewRequest(BaseModel):
 
 @router.post("/sync/preview")
 async def preview_sync(request: SyncPreviewRequest) -> dict[str, Any]:
-    """Count issues per project that would be synced."""
+    """Count issues per project that would be synced.
+
+    Paginates through the v3 Cloud API (which doesn't return totals)
+    using lightweight key-only requests to count matching issues.
+    """
     try:
+        from datetime import datetime
+
+        from dateutil.relativedelta import relativedelta
+
         jira = get_jira()
         counts: dict[str, int] = {}
         for proj in request.projects:
@@ -275,11 +288,6 @@ async def preview_sync(request: SyncPreviewRequest) -> dict[str, Any]:
             if request.start_date:
                 parts.append(f'updated >= "{request.start_date}"')
             else:
-                # Default: 1 year lookback (matches full_sync default)
-                from datetime import datetime
-
-                from dateutil.relativedelta import relativedelta
-
                 one_year_ago = (
                     datetime.utcnow().replace(day=1, month=1, hour=0, minute=0, second=0)
                     - relativedelta(years=1)
@@ -287,9 +295,33 @@ async def preview_sync(request: SyncPreviewRequest) -> dict[str, Any]:
                 parts.append(f'updated >= "{one_year_ago.strftime("%Y-%m-%d")}"')
             if request.end_date:
                 parts.append(f'updated <= "{request.end_date}"')
-            jql = " AND ".join(parts)
-            result = jira.search_issues(jql=jql, fields="key", limit=1)
-            counts[proj] = result.total if hasattr(result, "total") and result.total >= 0 else len(result.issues)
+            jql = " AND ".join(parts) + " ORDER BY key DESC"
+
+            # Paginate through results counting issues
+            count = 0
+            next_token: str | None = None
+            base_url = jira.jira.url
+            while True:
+                body: dict[str, Any] = {
+                    "jql": jql,
+                    "maxResults": 100,
+                    "fields": ["key"],
+                }
+                if next_token:
+                    body["nextPageToken"] = next_token
+                resp = jira.jira._session.post(
+                    f"{base_url}/rest/api/3/search/jql", json=body
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"Preview query failed for {proj}: {resp.status_code}")
+                    break
+                data = resp.json()
+                issues = data.get("issues", [])
+                count += len(issues)
+                next_token = data.get("nextPageToken")
+                if not next_token or data.get("isLast", True):
+                    break
+            counts[proj] = count
         return {"counts": counts, "total": sum(counts.values())}
     except Exception as e:
         logger.error(f"Sync preview failed: {e}")

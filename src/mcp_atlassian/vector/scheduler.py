@@ -41,6 +41,7 @@ class SyncScheduler:
         self.config = config or VectorConfig.from_env()
         self.interval_minutes = interval_minutes or self.config.sync_interval_minutes
         self._running = False
+        self._syncing = False  # True only while a sync operation is executing
         self._task: asyncio.Task | None = None
         self._last_sync: datetime | None = None
         self._last_result: SyncResult | None = None
@@ -56,7 +57,8 @@ class SyncScheduler:
     def status(self) -> dict:
         """Get current scheduler status."""
         return {
-            "running": self._running,
+            "running": self._syncing,
+            "enabled": self._running,
             "interval_minutes": self.interval_minutes,
             "last_sync": self._last_sync.isoformat() if self._last_sync else None,
             "sync_count": self._sync_count,
@@ -107,6 +109,7 @@ class SyncScheduler:
         while self._running:
             try:
                 logger.info("Starting scheduled incremental sync...")
+                self._syncing = True
                 result = await engine.incremental_sync()
 
                 self._last_sync = datetime.utcnow()
@@ -128,6 +131,8 @@ class SyncScheduler:
             except Exception as e:
                 self._error_count += 1
                 logger.error(f"Sync error: {e}", exc_info=True)
+            finally:
+                self._syncing = False
 
             # Wait for next interval
             if self._running:
@@ -140,16 +145,20 @@ class SyncScheduler:
             SyncResult with statistics.
         """
         engine = VectorSyncEngine(self.jira, config=self.config)
-        result = await engine.incremental_sync()
+        self._syncing = True
+        try:
+            result = await engine.incremental_sync()
 
-        self._last_sync = datetime.utcnow()
-        self._last_result = result
-        self._sync_count += 1
+            self._last_sync = datetime.utcnow()
+            self._last_result = result
+            self._sync_count += 1
 
-        if result.errors:
-            self._error_count += len(result.errors)
+            if result.errors:
+                self._error_count += len(result.errors)
 
-        return result
+            return result
+        finally:
+            self._syncing = False
 
 
 async def run_daemon(
