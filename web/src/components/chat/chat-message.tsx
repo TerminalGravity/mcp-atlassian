@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback } from "react"
+import { useCallback, useContext, useMemo } from "react"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Avatar } from "@/components/ui/avatar"
@@ -10,6 +10,7 @@ import { Streamdown } from "streamdown"
 import { SuggestionChips } from "./suggestion-chips"
 import { Reasoning } from "./reasoning"
 import { ResearchSteps } from "./research-steps"
+import { ResearchDataContext } from "./chat-container"
 // AI Elements integration - using standardized components
 import { ContextJiraCard } from "@/components/ai-elements/context"
 import {
@@ -20,6 +21,10 @@ import {
   RefinementChips,
   type Refinement,
 } from "@/components/ai-elements/refinement-chips"
+// New analytical UI components
+import { AggregationCard, type ProjectAggregations } from "@/components/ai-elements/aggregation-card"
+import { TrendChart, type TrendData } from "@/components/ai-elements/trend-chart"
+import { VelocityCard, type VelocityMetrics } from "@/components/ai-elements/velocity-card"
 
 interface ChatMessageProps {
   message: UIMessage
@@ -127,82 +132,167 @@ function TextWithCitations({
 }
 
 
+// Generate contextual follow-up suggestions (client-side)
+function generateFollowUpSuggestions(responseText: string, issues: JiraIssue[]): string[] {
+  const suggestions: string[] = []
+
+  // Find epics in results
+  const epics = issues.filter(i => i.issue_type === 'Epic')
+  if (epics.length > 0 && suggestions.length < 4) {
+    suggestions.push(`Tell me more about ${epics[0].issue_id}`)
+  }
+
+  // Check for common patterns in response
+  if (/blocker|blocked|blocking/i.test(responseText) && suggestions.length < 4) {
+    suggestions.push("What are the current blockers?")
+  }
+  if (/in progress/i.test(responseText) && suggestions.length < 4) {
+    suggestions.push("Show only open items")
+  }
+  if (/bug/i.test(responseText) && suggestions.length < 4) {
+    suggestions.push("Show me open bugs")
+  }
+
+  // Generic useful follow-ups
+  const fallbacks = [
+    "What needs attention?",
+    "Show recent activity",
+    "Who should I talk to?",
+  ]
+  for (const fb of fallbacks) {
+    if (suggestions.length < 4) {
+      suggestions.push(fb)
+    }
+  }
+
+  return suggestions.slice(0, 4)
+}
+
 export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
   const isUser = message.role === "user"
   const parts = message.parts || []
 
-  // Extract research phases - prefer new data-research-phase format, fall back to old tool-* format
-  // Deduplicate by ID, keeping only the latest version (phases are streamed twice: running then complete)
-  const researchPhaseMap = new Map<string, {
-    id: string
-    toolName: string
-    input: Record<string, unknown>
-    output?: { issues?: JiraIssue[]; count?: number; error?: string }
-    state: string
-  }>()
+  // Context is unused but kept for API compatibility
+  useContext(ResearchDataContext)
 
-  parts.filter((p): p is {
-    type: 'data-research-phase'
-    id: string
-    data: {
+  // Extract text content
+  const textParts = parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+  const textContent = textParts.map(p => p.text).join('')
+
+  // Extract research phases from message parts
+  const toolParts = useMemo(() => {
+    // Check for data-research-phase parts (current approach)
+    const researchPhaseMap = new Map<string, {
+      id: string
       toolName: string
       input: Record<string, unknown>
       output?: { issues?: JiraIssue[]; count?: number; error?: string }
       state: string
-    }
-  } => p.type === 'data-research-phase').forEach(p => {
-    // Later entries (complete state) overwrite earlier ones (running state)
-    researchPhaseMap.set(p.id, {
-      id: p.id,
-      toolName: p.data.toolName,
-      input: p.data.input,
-      output: p.data.output,
-      state: p.data.state,
+    }>()
+
+    parts.filter((p): p is {
+      type: 'data-research-phase'
+      id: string
+      data: {
+        toolName: string
+        input: Record<string, unknown>
+        output?: { issues?: JiraIssue[]; count?: number; error?: string }
+        state: string
+      }
+    } => p.type === 'data-research-phase').forEach(p => {
+      // Later entries (complete state) overwrite earlier ones (running state)
+      researchPhaseMap.set(p.id, {
+        id: p.id,
+        toolName: p.data.toolName,
+        input: p.data.input,
+        output: p.data.output,
+        state: p.data.state,
+      })
     })
-  })
 
-  const researchPhaseParts = Array.from(researchPhaseMap.values())
+    const researchPhaseParts = Array.from(researchPhaseMap.values())
 
-  // Only use old tool-* format if no new format parts exist (backwards compatibility)
-  const oldToolParts = researchPhaseParts.length === 0
-    ? parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
-        id: undefined as string | undefined,
-        toolName: p.type.replace('tool-', ''),
-        input: (p as { input?: unknown }).input as Record<string, unknown> | undefined,
-        output: (p as { output?: unknown }).output as { issues?: JiraIssue[]; count?: number; error?: string } | undefined,
-        state: (p as { state?: string }).state,
-      }))
-    : []
+    // Use data-research-phase format if present
+    if (researchPhaseParts.length > 0) {
+      return researchPhaseParts
+    }
 
-  // Use whichever format is present (they're mutually exclusive now)
-  const toolParts = researchPhaseParts.length > 0 ? researchPhaseParts : oldToolParts
+    return parts.filter((p) => p.type.startsWith('tool-')).map(p => ({
+      id: undefined as string | undefined,
+      toolName: p.type.replace('tool-', ''),
+      input: (p as { input?: unknown }).input as Record<string, unknown> | undefined,
+      output: (p as { output?: unknown }).output as { issues?: JiraIssue[]; count?: number; error?: string } | undefined,
+      state: (p as { state?: string }).state,
+    }))
+  }, [parts])
 
-  const textParts = parts.filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-  const textContent = textParts.map(p => p.text).join('')
+  // Collect all issues from tool outputs
+  const allIssues = useMemo(() => {
+    return toolParts
+      .flatMap(t => (t.output as { issues?: JiraIssue[] })?.issues || [])
+      .filter((issue, index, self) => self.findIndex(i => i.issue_id === issue.issue_id) === index)
+  }, [toolParts])
 
-  // Extract custom data parts
+  // Extract custom data parts from message parts
   const suggestionParts = parts.filter((p): p is { type: 'data-suggestions'; data: { prompts: string[] } } =>
     p.type === 'data-suggestions'
   )
   const reasoningParts = parts.filter((p): p is { type: 'data-reasoning'; data: { content: string; duration?: number } } =>
     p.type === 'data-reasoning'
   )
-  const refinementParts = parts.filter((p): p is {
-    type: 'data-refinements'
-    id: string
-    data: {
-      originalQuery: string
-      totalResults: number
-      refinements: Refinement[]
-    }
-  } =>
-    p.type === 'data-refinements'
-  )
 
-  // Collect all issues from tool outputs for the Sources component
-  const allIssues = toolParts
-    .flatMap(t => (t.output as { issues?: JiraIssue[] })?.issues || [])
-    .filter((issue, index, self) => self.findIndex(i => i.issue_id === issue.issue_id) === index)
+  // Refinements from message parts
+  const refinementParts = useMemo(() => {
+    return parts.filter((p): p is {
+      type: 'data-refinements'
+      id: string
+      data: {
+        originalQuery: string
+        totalResults: number
+        refinements: Refinement[]
+      }
+    } => p.type === 'data-refinements')
+  }, [parts])
+
+  // Aggregation data from message parts
+  const aggregationParts = useMemo(() => {
+    return parts.filter((p): p is {
+      type: 'data-aggregations'
+      id: string
+      data: ProjectAggregations[]
+    } => p.type === 'data-aggregations')
+  }, [parts])
+
+  // Trend data from message parts
+  const trendParts = useMemo(() => {
+    return parts.filter((p): p is {
+      type: 'data-trends'
+      id: string
+      data: TrendData
+    } => p.type === 'data-trends')
+  }, [parts])
+
+  // Velocity data from message parts
+  const velocityParts = useMemo(() => {
+    return parts.filter((p): p is {
+      type: 'data-velocity'
+      id: string
+      data: VelocityMetrics
+    } => p.type === 'data-velocity')
+  }, [parts])
+
+  // Get suggestions from message parts or generate client-side
+  const suggestions = useMemo(() => {
+    // Check message parts first
+    if (suggestionParts.length > 0) {
+      return suggestionParts[0].data.prompts
+    }
+    // Generate client-side from research data as fallback
+    if (textContent && allIssues.length > 0) {
+      return generateFollowUpSuggestions(textContent, allIssues)
+    }
+    return []
+  }, [suggestionParts, textContent, allIssues])
 
   // Handler for refinement selection - constructs a filtered query
   const handleRefinementSelect = useCallback(
@@ -291,6 +381,30 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
           </motion.div>
         )}
 
+        {/* Aggregation charts - analytical queries */}
+        {!isUser && aggregationParts.length > 0 && aggregationParts.map((part, i) => (
+          <AggregationCard
+            key={`aggregations-${part.id || i}`}
+            aggregations={part.data}
+          />
+        ))}
+
+        {/* Trend charts - temporal queries */}
+        {!isUser && trendParts.length > 0 && trendParts.map((part, i) => (
+          <TrendChart
+            key={`trends-${part.id || i}`}
+            trendData={part.data}
+          />
+        ))}
+
+        {/* Velocity metrics - velocity queries */}
+        {!isUser && velocityParts.length > 0 && velocityParts.map((part, i) => (
+          <VelocityCard
+            key={`velocity-${part.id || i}`}
+            velocity={part.data}
+          />
+        ))}
+
         {/* Context: Jira issues referenced - using ai-elements component */}
         {!isUser && textContent && allIssues.length > 0 && (
           <ContextJiraCard
@@ -314,13 +428,12 @@ export function ChatMessage({ message, onSendMessage }: ChatMessageProps) {
         ))}
 
         {/* Follow-up suggestions */}
-        {!isUser && suggestionParts.length > 0 && suggestionParts.map((part, i) => (
+        {!isUser && textContent && suggestions.length > 0 && (
           <SuggestionChips
-            key={`suggestions-${i}`}
-            prompts={part.data.prompts}
+            prompts={suggestions}
             onSelect={onSendMessage}
           />
-        ))}
+        )}
       </div>
     </motion.div>
   )

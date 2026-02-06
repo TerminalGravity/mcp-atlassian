@@ -104,8 +104,127 @@ function streamPhase(writer: UIMessageStreamWriter, phase: ResearchPhase) {
 }
 
 /**
+ * Execute the full research pipeline synchronously (no streaming).
+ *
+ * This is the core of the "forced agent loop" - it ALWAYS executes
+ * multiple phases regardless of what the AI might want to do.
+ * Returns all results at once for use with toUIMessageStreamResponse.
+ */
+export async function executeResearchPipelineSync(
+  query: string,
+  currentUser: string
+): Promise<ResearchResult> {
+  const phases: ResearchPhase[] = []
+  const allIssues: JiraIssue[] = []
+  const seenIssueIds = new Set<string>()
+
+  // Helper to add issues without duplicates
+  const addIssues = (issues: JiraIssue[]) => {
+    for (const issue of issues) {
+      if (!seenIssueIds.has(issue.issue_id)) {
+        seenIssueIds.add(issue.issue_id)
+        allIssues.push(issue)
+      }
+    }
+  }
+
+  // Phase 0: Classify the query
+  const classification = classifyQuery(query, currentUser)
+  console.log('[Research] Classification:', classification)
+
+  // Phase 1: JQL Search (runs for 'jql' or 'hybrid' types)
+  if ((classification.type === 'jql' || classification.type === 'hybrid') && classification.jqlQuery) {
+    const jqlPhase: ResearchPhase = {
+      id: generateId(),
+      name: 'JQL Search',
+      status: 'running',
+      toolName: 'jql_search',
+      input: { jql: classification.jqlQuery },
+    }
+    phases.push(jqlPhase)
+
+    const jqlResult = await searchJQL(classification.jqlQuery, 20)
+    jqlPhase.status = jqlResult.error ? 'error' : 'complete'
+    jqlPhase.output = jqlResult
+    addIssues(jqlResult.issues || [])
+  }
+
+  // Phase 2: Semantic Search (runs for 'semantic' or 'hybrid' types)
+  if ((classification.type === 'semantic' || classification.type === 'hybrid') && classification.semanticQuery) {
+    const semanticPhase: ResearchPhase = {
+      id: generateId(),
+      name: 'Semantic Search',
+      status: 'running',
+      toolName: 'semantic_search',
+      input: { query: classification.semanticQuery },
+    }
+    phases.push(semanticPhase)
+
+    const semanticResult = await searchVectorStore(classification.semanticQuery, 15)
+    semanticPhase.status = semanticResult.error ? 'error' : 'complete'
+    semanticPhase.output = semanticResult
+    addIssues(semanticResult.issues || [])
+  }
+
+  // Phase 3: Epic Expansion (FORCED when applicable)
+  if (classification.shouldExpandEpics) {
+    const epics = allIssues.filter(i => i.issue_type === 'Epic')
+
+    for (const epic of epics.slice(0, 3)) {
+      const phase: ResearchPhase = {
+        id: generateId(),
+        name: `Epic Children: ${epic.issue_id}`,
+        status: 'running',
+        toolName: 'get_epic_children',
+        input: { epicKey: epic.issue_id, epicSummary: epic.summary },
+      }
+      phases.push(phase)
+
+      let childResult = await searchJQL(`parent = ${epic.issue_id} ORDER BY issuetype, status`, 30)
+
+      if ((childResult.issues?.length || 0) < 3 && !childResult.error) {
+        const epicLinkResult = await searchJQL(`"Epic Link" = ${epic.issue_id} ORDER BY issuetype, status`, 30)
+        if ((epicLinkResult.issues?.length || 0) > (childResult.issues?.length || 0)) {
+          childResult = epicLinkResult
+        }
+      }
+
+      phase.status = childResult.error ? 'error' : 'complete'
+      phase.output = childResult
+      addIssues(childResult.issues || [])
+    }
+  }
+
+  // Phase 4: Link Expansion (FORCED when applicable)
+  if (classification.shouldFetchLinks && allIssues.length > 0) {
+    const primaryIssue = allIssues[0]
+
+    const phase: ResearchPhase = {
+      id: generateId(),
+      name: `Linked Issues: ${primaryIssue.issue_id}`,
+      status: 'running',
+      toolName: 'get_linked_issues',
+      input: { issueKey: primaryIssue.issue_id },
+    }
+    phases.push(phase)
+
+    const linksResult = await getLinkedIssues(primaryIssue.issue_id)
+    phase.status = linksResult.error ? 'error' : 'complete'
+    phase.output = linksResult
+    addIssues(linksResult.issues || [])
+  }
+
+  return {
+    phases,
+    allIssues,
+    classification,
+  }
+}
+
+/**
  * Execute the full research pipeline with streaming updates.
  *
+ * @deprecated Use executeResearchPipelineSync instead to avoid streaming issues.
  * This is the core of the "forced agent loop" - it ALWAYS executes
  * multiple phases regardless of what the AI might want to do.
  */

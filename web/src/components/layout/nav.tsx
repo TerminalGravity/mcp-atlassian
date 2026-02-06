@@ -12,6 +12,7 @@ const NAV_LINKS = [
   { href: "/", label: "Chat" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/my-work", label: "My Work" },
+  { href: "/settings", label: "Settings" },
 ]
 
 export function Nav() {

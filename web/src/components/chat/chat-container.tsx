@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
-import { useRef, useEffect, useState, useMemo, useCallback } from "react"
+import { useRef, useEffect, useState, useMemo, useCallback, createContext } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -35,6 +35,14 @@ const MODELS = [
 
 type ModelId = typeof MODELS[number]["id"]
 
+// Context placeholder - research data comes through message parts (data-research-phase, etc.)
+// This context is kept for backwards compatibility but is not used
+export const ResearchDataContext = createContext<{
+  research: null
+  refinements: null
+  suggestions: null
+}>({ research: null, refinements: null, suggestions: null })
+
 export function ChatContainer() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showStarters, setShowStarters] = useState(true)
@@ -60,6 +68,9 @@ export function ChatContainer() {
   const { messages, status, sendMessage, setMessages, stop, error } = useChat({
     transport,
   })
+
+  // Research data comes through message parts (data-research-phase, data-refinements, data-suggestions)
+  // The ChatMessage component reads these from the message.parts array directly
 
   // Track dismissed errors to avoid re-showing them
   const [dismissedErrorId, setDismissedErrorId] = useState<string | null>(null)
@@ -373,9 +384,11 @@ export function ChatContainer() {
             </AnimatePresence>
 
             {/* Chat Messages */}
-            {messages.map((message, index) => (
-              <ChatMessage key={`${message.id}-${index}`} message={message} onSendMessage={onSend} />
-            ))}
+            <ResearchDataContext.Provider value={{ research: null, refinements: null, suggestions: null }}>
+              {messages.map((message, index) => (
+                <ChatMessage key={`${message.id}-${index}`} message={message} onSendMessage={onSend} />
+              ))}
+            </ResearchDataContext.Provider>
 
             {/* Loading indicator with active mode */}
             <AnimatePresence>

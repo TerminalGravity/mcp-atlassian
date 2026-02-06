@@ -9,10 +9,14 @@ import sys
 
 import click
 
+from mcp_atlassian.eval.dataset import EvaluationDataset
 from mcp_atlassian.eval.service import EvaluationService
 from mcp_atlassian.eval.store import EvaluationStore
 
 logger = logging.getLogger(__name__)
+
+# Dataset path
+DATASET_PATH = "data/eval"
 
 
 @click.group()
@@ -210,6 +214,80 @@ def status(run_id: str) -> None:
         click.echo(f"\nErrors ({len(run.errors)}):")
         for err in run.errors[:5]:
             click.echo(f"  - {err}")
+
+
+@cli.command()
+def seed() -> None:
+    """Seed MongoDB with sample evaluation data for testing.
+
+    Example:
+        uv run python -m mcp_atlassian.eval.cli seed
+    """
+    dataset = EvaluationDataset()
+    count = dataset.seed_sample_data()
+    click.echo(f"Seeded {count} sample evaluation documents")
+    click.echo(f"\nDataset path: {dataset.dataset_path}")
+
+
+@cli.command("export")
+@click.option(
+    "--limit",
+    "-n",
+    default=100,
+    help="Maximum documents to export",
+)
+@click.option(
+    "--output",
+    "-o",
+    default="exported_evaluations.json",
+    help="Output filename",
+)
+def export_data(limit: int, output: str) -> None:
+    """Export evaluation data from MongoDB to JSON file.
+
+    Example:
+        uv run python -m mcp_atlassian.eval.cli export --limit 50
+    """
+    dataset = EvaluationDataset()
+    filepath = dataset.export_from_mongodb(limit=limit, filename=output)
+    click.echo(f"Exported to: {filepath}")
+
+
+@cli.command("import")
+@click.option(
+    "--input",
+    "-i",
+    "input_file",
+    default="exported_evaluations.json",
+    help="Input filename",
+)
+def import_data(input_file: str) -> None:
+    """Import evaluation data from JSON file to MongoDB.
+
+    Example:
+        uv run python -m mcp_atlassian.eval.cli import --input data.json
+    """
+    dataset = EvaluationDataset()
+    try:
+        count = dataset.import_to_mongodb(filename=input_file)
+        click.echo(f"Imported {count} documents")
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("init-ground-truth")
+def init_ground_truth() -> None:
+    """Create a template ground truth file for manual annotation.
+
+    Example:
+        uv run python -m mcp_atlassian.eval.cli init-ground-truth
+    """
+    dataset = EvaluationDataset()
+    filepath = dataset.create_ground_truth_template()
+    click.echo(f"Created ground truth template: {filepath}")
+    click.echo("\nEdit this file to add your test cases, then use:")
+    click.echo("  uv run python -m mcp_atlassian.eval.cli run --ground-truth")
 
 
 def main() -> None:

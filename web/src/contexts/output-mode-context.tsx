@@ -37,7 +37,6 @@ export function OutputModeProvider({ children }: { children: ReactNode }) {
   const [autoDetectEnabled, setAutoDetectEnabledState] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [isHydrated, setIsHydrated] = useState(false)
   const { currentUser } = useUser()
 
   // Load modes and user preferences
@@ -83,7 +82,7 @@ export function OutputModeProvider({ children }: { children: ReactNode }) {
 
   // Initial load
   useEffect(() => {
-    loadModesAndPreferences().then(() => setIsHydrated(true))
+    loadModesAndPreferences()
   }, [loadModesAndPreferences])
 
   // Set selected mode and persist preference
@@ -148,11 +147,8 @@ export function OutputModeProvider({ children }: { children: ReactNode }) {
     await loadModesAndPreferences()
   }, [loadModesAndPreferences])
 
-  // Don't render until hydrated to prevent SSR mismatch
-  if (!isHydrated) {
-    return null
-  }
-
+  // Always render children - components can use isLoading/error state
+  // Hydration is tracked internally but doesn't block rendering
   return (
     <OutputModeContext.Provider
       value={{

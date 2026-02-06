@@ -20,6 +20,9 @@ from mcp_atlassian.vector.store import LanceDBStore
 from mcp_atlassian.web.mongo import check_connection as check_mongo, close_connection as close_mongo
 from mcp_atlassian.web.output_modes import router as output_modes_router, seed_default_templates
 from mcp_atlassian.web.eval_routes import router as eval_router
+from mcp_atlassian.web.routes.admin import router as admin_router
+from mcp_atlassian.web.routes.aggregations import router as aggregations_router
+from mcp_atlassian.web.routes.insights import router as insights_router
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +136,11 @@ app.include_router(output_modes_router)
 
 # Register evaluation router
 app.include_router(eval_router)
+
+# Register aggregations, insights, and admin routers
+app.include_router(aggregations_router)
+app.include_router(insights_router)
+app.include_router(admin_router)
 
 
 class SearchRequest(BaseModel):
