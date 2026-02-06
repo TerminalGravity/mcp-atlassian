@@ -314,10 +314,15 @@ export async function testJiraConnection(): Promise<ConnectionTest> {
   return response.json()
 }
 
+export interface SyncOptions {
+  syncComments?: boolean
+}
+
 export async function triggerFullSync(
   projects?: string[],
   startDate?: string,
   endDate?: string,
+  options?: SyncOptions,
 ): Promise<{ started: boolean }> {
   const response = await fetch(`${BACKEND_URL}/api/admin/sync/full`, {
     method: "POST",
@@ -326,6 +331,7 @@ export async function triggerFullSync(
       projects: projects ?? null,
       start_date: startDate ?? null,
       end_date: endDate ?? null,
+      sync_comments: options?.syncComments ?? null,
     }),
   })
   if (!response.ok) {

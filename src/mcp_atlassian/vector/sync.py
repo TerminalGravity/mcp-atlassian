@@ -162,6 +162,7 @@ class VectorSyncEngine:
         projects: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        sync_comments: bool | None = None,
     ) -> SyncResult:
         """Perform a full sync of all issues.
 
@@ -171,6 +172,7 @@ class VectorSyncEngine:
             start_date: Optional start date filter (YYYY-MM-DD). If None,
                         defaults to 1 year lookback.
             end_date: Optional end date filter (YYYY-MM-DD).
+            sync_comments: Override config.sync_comments for this run.
 
         Returns:
             SyncResult with statistics
@@ -203,6 +205,7 @@ class VectorSyncEngine:
                     state=state,
                     start_date=start_date,
                     end_date=end_date,
+                    sync_comments=sync_comments,
                 )
                 result.issues_processed += project_result.issues_processed
                 result.issues_embedded += project_result.issues_embedded
@@ -377,6 +380,7 @@ class VectorSyncEngine:
         state: SyncState,
         start_date: str | None = None,
         end_date: str | None = None,
+        sync_comments: bool | None = None,
     ) -> SyncResult:
         """Sync a single project.
 
@@ -386,6 +390,7 @@ class VectorSyncEngine:
             state: Current sync state
             start_date: Optional start date filter (YYYY-MM-DD)
             end_date: Optional end date filter (YYYY-MM-DD)
+            sync_comments: Override config.sync_comments for this run
 
         Returns:
             SyncResult for this project
@@ -568,7 +573,8 @@ class VectorSyncEngine:
             state.last_issue_updated = max_updated
 
         # Sync comments for embedded issues (if enabled)
-        if self.config.sync_comments and result.issues_embedded > 0:
+        should_sync_comments = sync_comments if sync_comments is not None else self.config.sync_comments
+        if should_sync_comments and result.issues_embedded > 0:
             all_issue_keys = self.store.get_all_issue_ids(project_key=project_key)
             # Limit to recently processed issues for incremental sync
             if incremental:

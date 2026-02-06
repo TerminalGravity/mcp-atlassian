@@ -201,12 +201,14 @@ class FullSyncRequest(BaseModel):
     projects: list[str] | None = None
     start_date: str | None = None  # "YYYY-MM-DD"
     end_date: str | None = None  # "YYYY-MM-DD"
+    sync_comments: bool | None = None  # Override config default
 
 
 async def _run_full_sync(
     projects: list[str] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    sync_comments: bool | None = None,
 ) -> None:
     """Run full sync in background."""
     global _active_sync_engine
@@ -220,7 +222,10 @@ async def _run_full_sync(
         if scheduler:
             scheduler._syncing = True
         await engine.full_sync(
-            projects=projects, start_date=start_date, end_date=end_date
+            projects=projects,
+            start_date=start_date,
+            end_date=end_date,
+            sync_comments=sync_comments,
         )
     except Exception as e:
         logger.error(f"Background full sync failed: {e}", exc_info=True)
@@ -237,7 +242,11 @@ async def trigger_full_sync(
 ) -> dict[str, Any]:
     """Trigger a full sync. Runs in the background — poll /api/sync/status."""
     background_tasks.add_task(
-        _run_full_sync, request.projects, request.start_date, request.end_date
+        _run_full_sync,
+        request.projects,
+        request.start_date,
+        request.end_date,
+        request.sync_comments,
     )
     return {"started": True}
 

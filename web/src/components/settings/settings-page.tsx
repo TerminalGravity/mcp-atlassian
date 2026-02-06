@@ -41,6 +41,7 @@ import {
   type JiraProject,
   type ConnectionTest,
   type SyncPreview,
+  type SyncOptions,
 } from "@/lib/api"
 
 // ---------------------------------------------------------------------------
@@ -635,6 +636,9 @@ function SyncManagementTab() {
   const [startDate, setStartDate] = useState(defaultStartDate)
   const [endDate, setEndDate] = useState(defaultEndDate)
 
+  // Sync options
+  const [syncComments, setSyncComments] = useState(true)
+
   // Preview state
   const [preview, setPreview] = useState<SyncPreview | null>(null)
   const [previewing, setPreviewing] = useState(false)
@@ -734,12 +738,14 @@ function SyncManagementTab() {
         selectedProjects.size > 0
           ? Array.from(selectedProjects)
           : undefined
-      await triggerFullSync(projectKeys, startDate, endDate)
+      await triggerFullSync(projectKeys, startDate, endDate, {
+        syncComments,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Full sync failed")
       setSyncRunning(false)
     }
-  }, [selectedProjects, startDate, endDate])
+  }, [selectedProjects, startDate, endDate, syncComments])
 
   const handleCompact = useCallback(async () => {
     setCompacting(true)
@@ -972,6 +978,42 @@ function SyncManagementTab() {
                   />
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Sync Options */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Settings className="h-4 w-4" />
+                Options
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-sm font-medium">Sync Comments</span>
+                  <p className="text-[11px] text-muted-foreground">
+                    Index issue comments for semantic search
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={syncComments}
+                  disabled={syncRunning}
+                  onClick={() => setSyncComments((v) => !v)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    syncComments ? "bg-primary" : "bg-muted"
+                  } ${syncRunning ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                      syncComments ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </label>
             </CardContent>
           </Card>
 
