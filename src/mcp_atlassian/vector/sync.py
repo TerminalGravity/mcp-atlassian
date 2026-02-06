@@ -138,6 +138,22 @@ class VectorSyncEngine:
         self.embedder = EmbeddingPipeline(config=self.config)
         self._state_path = self.config.db_path / "sync_state.json"
         self._cancelled = False
+        self._progress_base: dict[str, int] = {
+            "processed": 0, "embedded": 0, "skipped": 0, "errors": 0,
+        }
+
+        # Live progress tracking (read by admin API during sync)
+        self.progress: dict[str, Any] = {
+            "active": False,
+            "current_project": None,
+            "projects_total": 0,
+            "projects_done": 0,
+            "issues_processed": 0,
+            "issues_embedded": 0,
+            "issues_skipped": 0,
+            "errors": 0,
+            "phase": "idle",  # idle | fetching | embedding | comments | done
+        }
 
     def _load_state(self) -> SyncState:
         """Load sync state from disk."""
@@ -156,6 +172,14 @@ class VectorSyncEngine:
     def is_cancelled(self) -> bool:
         """Check if cancellation has been requested."""
         return self._cancelled
+
+    def _update_progress(self, project_result: SyncResult) -> None:
+        """Update live progress with current project's running counts."""
+        base = self._progress_base
+        self.progress["issues_processed"] = base["processed"] + project_result.issues_processed
+        self.progress["issues_embedded"] = base["embedded"] + project_result.issues_embedded
+        self.progress["issues_skipped"] = base["skipped"] + project_result.issues_skipped
+        self.progress["errors"] = base["errors"] + len(project_result.errors)
 
     async def full_sync(
         self,
@@ -192,11 +216,32 @@ class VectorSyncEngine:
 
         logger.info(f"Starting full sync for projects: {projects_to_sync}")
 
+        # Initialize live progress
+        self.progress = {
+            "active": True,
+            "current_project": None,
+            "projects_total": len(projects_to_sync),
+            "projects_done": 0,
+            "issues_processed": 0,
+            "issues_embedded": 0,
+            "issues_skipped": 0,
+            "errors": 0,
+            "phase": "fetching",
+        }
+
         for project_key in projects_to_sync:
             if self._cancelled:
                 logger.info("Full sync cancelled before starting project %s", project_key)
                 result.errors.append("Sync cancelled by user")
                 break
+
+            self.progress["current_project"] = project_key
+            self._progress_base = {
+                "processed": result.issues_processed,
+                "embedded": result.issues_embedded,
+                "skipped": result.issues_skipped,
+                "errors": len(result.errors),
+            }
 
             try:
                 project_result = await self._sync_project(
@@ -212,6 +257,13 @@ class VectorSyncEngine:
                 result.issues_skipped += project_result.issues_skipped
                 result.errors.extend(project_result.errors)
 
+                # Update live progress totals
+                self.progress["projects_done"] += 1
+                self.progress["issues_processed"] = result.issues_processed
+                self.progress["issues_embedded"] = result.issues_embedded
+                self.progress["issues_skipped"] = result.issues_skipped
+                self.progress["errors"] = len(result.errors)
+
                 # Update state
                 if project_key not in state.projects_synced:
                     state.projects_synced.append(project_key)
@@ -220,6 +272,10 @@ class VectorSyncEngine:
                 error_msg = f"Error syncing project {project_key}: {e}"
                 logger.error(error_msg)
                 result.errors.append(error_msg)
+                self.progress["errors"] = len(result.errors)
+
+        self.progress["phase"] = "done"
+        self.progress["active"] = False
 
         # Finalize state
         state.last_sync_at = datetime.utcnow()
@@ -461,13 +517,20 @@ class VectorSyncEngine:
 
                 # Retry with exponential backoff for transient errors
                 max_retries = 3
+                loop = asyncio.get_event_loop()
                 for attempt in range(max_retries):
                     try:
-                        search_result = self.jira.search_issues(
-                            jql=current_jql,
-                            fields="*all",
-                            start=0,  # Always start from 0, use key filter for pagination
-                            limit=100,  # Reduced from 1000 to avoid overwhelming Jira API
+                        # Run synchronous Jira API call in thread executor
+                        # so it doesn't block the event loop (allowing HTTP
+                        # requests like progress polling to be served).
+                        search_result = await loop.run_in_executor(
+                            None,
+                            lambda jql=current_jql: self.jira.search_issues(
+                                jql=jql,
+                                fields="*all",
+                                start=0,
+                                limit=100,
+                            ),
                         )
                         break  # Success, exit retry loop
                     except Exception as e:
@@ -533,6 +596,7 @@ class VectorSyncEngine:
 
                 # Embed and store in batches
                 if len(issues_to_embed) >= embed_batch_size:
+                    self.progress["phase"] = "embedding"
                     embedded_count = await self._embed_and_store(
                         list(issues_to_embed.values()), bulk_insert=not incremental
                     )
@@ -544,6 +608,10 @@ class VectorSyncEngine:
                         f"{result.issues_processed} processed, {len(synced_ids)} unique"
                     )
                     issues_to_embed = {}
+                    self._update_progress(result)
+                    self.progress["phase"] = "fetching"
+                    # Yield to event loop so progress polls can be served
+                    await asyncio.sleep(0)
 
                 # Check if we got fewer results than requested (last page)
                 if len(search_result.issues) < 100:
@@ -557,11 +625,13 @@ class VectorSyncEngine:
 
         # Process remaining issues
         if issues_to_embed:
+            self.progress["phase"] = "embedding"
             embedded_count = await self._embed_and_store(
                 list(issues_to_embed.values()), bulk_insert=not incremental
             )
             result.issues_embedded += embedded_count
             synced_ids.update(issues_to_embed.keys())
+            self._update_progress(result)
 
         # Compact the table after full sync to reduce storage
         if not incremental and result.issues_embedded > 0:
@@ -586,6 +656,7 @@ class VectorSyncEngine:
                 issue_keys_to_sync = all_issue_keys[:100]  # Limit for full sync
 
             if issue_keys_to_sync:
+                self.progress["phase"] = "comments"
                 logger.info(f"Syncing comments for {len(issue_keys_to_sync)} issues")
                 comments_processed, comments_embedded, comment_errors = (
                     await self._sync_comments_for_issues(issue_keys_to_sync)
@@ -647,11 +718,16 @@ class VectorSyncEngine:
             )
             records.append(record)
 
-        # Store in vector database
+        # Store in vector database (run in executor to avoid blocking event loop)
+        loop = asyncio.get_event_loop()
         if bulk_insert:
-            count = self.store.bulk_insert_issues(records)
+            count = await loop.run_in_executor(
+                None, self.store.bulk_insert_issues, records
+            )
         else:
-            count = self.store.upsert_issues(records)
+            count = await loop.run_in_executor(
+                None, self.store.upsert_issues, records
+            )
         logger.debug(f"Stored {count} issue embeddings")
 
         return count
@@ -673,10 +749,13 @@ class VectorSyncEngine:
         errors: list[str] = []
         comments_to_embed: list[dict[str, Any]] = []
 
+        loop = asyncio.get_event_loop()
         for issue_key in issue_keys:
             try:
-                # Fetch comments via Jira API
-                comments_result = self.jira.get_issue_comments(issue_key)
+                # Fetch comments via Jira API (in executor to avoid blocking event loop)
+                comments_result = await loop.run_in_executor(
+                    None, self.jira.get_issue_comments, issue_key
+                )
                 if not comments_result:
                     continue
 

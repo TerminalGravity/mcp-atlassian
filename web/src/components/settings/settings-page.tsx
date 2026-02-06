@@ -42,6 +42,7 @@ import {
   type ConnectionTest,
   type SyncPreview,
   type SyncOptions,
+  type SyncProgress,
 } from "@/lib/api"
 
 // ---------------------------------------------------------------------------
@@ -625,6 +626,7 @@ function SyncManagementTab() {
   const [compactResult, setCompactResult] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
   const [syncElapsed, setSyncElapsed] = useState(0)
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
 
   // Date range state
   const defaultStartDate = useMemo(() => {
@@ -673,15 +675,14 @@ function SyncManagementTab() {
     if (!syncRunning) return
     const interval = setInterval(async () => {
       try {
-        const [status, healthData] = await Promise.all([
-          fetchSyncStatus(),
-          fetchSystemHealth(),
-        ])
+        const healthData = await fetchSystemHealth()
         setHealth(healthData)
-        setSyncRunning(status.running)
-        if (!status.running) {
+        setSyncRunning(healthData.sync.running)
+        setSyncProgress(healthData.sync.progress ?? null)
+        if (!healthData.sync.running) {
           loadData()
           setSyncElapsed(0)
+          setSyncProgress(null)
         }
       } catch {
         // Ignore polling errors
@@ -746,6 +747,12 @@ function SyncManagementTab() {
       await triggerFullSync(projectKeys, startDate, endDate, {
         syncComments,
       })
+      // Immediately fetch first progress update instead of waiting 2s
+      try {
+        const healthData = await fetchSystemHealth()
+        setHealth(healthData)
+        setSyncProgress(healthData.sync.progress ?? null)
+      } catch { /* polling will catch up */ }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Full sync failed")
       setSyncRunning(false)
@@ -871,21 +878,41 @@ function SyncManagementTab() {
         }
       `}</style>
 
-      {/* Active sync banner */}
+      {/* Active sync banner with real progress */}
       {syncRunning && (
-        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-4">
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-3">
           <div className="flex items-center gap-3">
             <div className="relative">
               <Loader2 className="h-5 w-5 animate-spin text-amber-600 dark:text-amber-400" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">Sync in progress...</p>
+              <p className="text-sm font-medium">
+                {syncProgress?.current_project
+                  ? `Syncing ${syncProgress.current_project}...`
+                  : "Sync in progress..."}
+              </p>
               <p className="text-xs text-muted-foreground">
-                Elapsed: {formatDuration(syncElapsed)}
+                {syncProgress ? (
+                  <>
+                    {syncProgress.phase === "embedding" ? "Embedding" :
+                     syncProgress.phase === "comments" ? "Comments" :
+                     syncProgress.phase === "fetching" ? "Fetching" : "Working"}
+                    {" \u00b7 "}
+                    Project {syncProgress.projects_done + 1} of {syncProgress.projects_total}
+                    {" \u00b7 "}
+                    {formatDuration(syncElapsed)}
+                  </>
+                ) : (
+                  <>Elapsed: {formatDuration(syncElapsed)}</>
+                )}
               </p>
             </div>
-            <div className="flex-1">
-              <SyncProgressBar running />
+            <div className="text-right text-xs tabular-nums text-muted-foreground shrink-0">
+              {syncProgress && (
+                <div>
+                  <span className="text-foreground font-medium">{formatNumber(syncProgress.issues_embedded)}</span> embedded
+                </div>
+              )}
             </div>
             <Button
               variant="outline"
@@ -897,6 +924,41 @@ function SyncManagementTab() {
               Stop
             </Button>
           </div>
+          {/* Determinate progress bar */}
+          {syncProgress && syncProgress.projects_total > 0 ? (
+            <div className="space-y-1">
+              <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-amber-500 rounded-full transition-all duration-500 ease-out"
+                  style={{
+                    width: `${Math.max(2, (() => {
+                      // Use issue-level progress when preview data is available (smoother)
+                      if (preview && preview.total > 0) {
+                        return Math.min(100, (syncProgress.issues_processed / preview.total) * 100)
+                      }
+                      // Fall back to project-level progress
+                      return (syncProgress.projects_done / syncProgress.projects_total) * 100
+                    })())}%`,
+                  }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-muted-foreground tabular-nums">
+                <span>
+                  {formatNumber(syncProgress.issues_processed)}{preview ? ` / ${formatNumber(preview.total)}` : ""} processed
+                  {syncProgress.issues_skipped > 0 && ` \u00b7 ${formatNumber(syncProgress.issues_skipped)} skipped`}
+                  {syncProgress.errors > 0 && ` \u00b7 ${syncProgress.errors} errors`}
+                </span>
+                <span>{Math.round((() => {
+                  if (preview && preview.total > 0) {
+                    return Math.min(100, (syncProgress.issues_processed / preview.total) * 100)
+                  }
+                  return (syncProgress.projects_done / syncProgress.projects_total) * 100
+                })())}%</span>
+              </div>
+            </div>
+          ) : (
+            <SyncProgressBar running />
+          )}
         </div>
       )}
 
@@ -1249,34 +1311,160 @@ function SyncManagementTab() {
             </CardContent>
           </Card>
 
-          {/* Last Sync Result */}
-          <Card>
+          {/* Last Sync Result / Live Progress */}
+          <Card className={syncRunning ? "border-amber-200 dark:border-amber-800" : ""}>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <Activity className="h-4 w-4" />
-                {syncRunning ? "Sync Progress" : "Last Sync Result"}
+                {syncRunning ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-600 dark:text-amber-400" />
+                ) : (
+                  <Activity className="h-4 w-4" />
+                )}
+                {syncRunning ? "Sync in Progress" : "Last Sync"}
               </CardTitle>
             </CardHeader>
             <CardContent>
               {syncRunning ? (
-                <div className="space-y-3">
-                  <SyncProgressBar running />
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1.5">
-                      <StatusDot active color="yellow" />
-                      Syncing...
-                    </span>
-                    <span className="tabular-nums">{formatDuration(syncElapsed)}</span>
+                <div className="space-y-4">
+                  {/* Main progress bar */}
+                  {(() => {
+                    const hasProgress = syncProgress && syncProgress.projects_total > 0
+                    const pct = hasProgress
+                      ? preview && preview.total > 0
+                        ? Math.min(100, (syncProgress.issues_processed / preview.total) * 100)
+                        : (syncProgress.projects_done / syncProgress.projects_total) * 100
+                      : 0
+                    return (
+                      <div className="space-y-1.5">
+                        <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+                          {hasProgress ? (
+                            <div
+                              className="h-full bg-amber-500 rounded-full transition-all duration-700 ease-out"
+                              style={{ width: `${Math.max(2, pct)}%` }}
+                            />
+                          ) : (
+                            <div
+                              className="h-full rounded-full animate-pulse bg-amber-300/50"
+                              style={{ width: "100%" }}
+                            />
+                          )}
+                        </div>
+                        <div className="flex justify-between text-[11px] text-muted-foreground tabular-nums">
+                          <span>
+                            {hasProgress
+                              ? `${formatNumber(syncProgress.issues_processed)}${preview ? ` / ${formatNumber(preview.total)}` : ""} issues`
+                              : "Connecting..."}
+                          </span>
+                          <span className="font-medium text-foreground">
+                            {hasProgress ? `${Math.round(pct)}%` : ""}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Live stat counters */}
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[
+                      {
+                        label: "Embedded",
+                        value: syncProgress?.issues_embedded ?? 0,
+                        color: "text-emerald-600 dark:text-emerald-400",
+                        bg: "bg-emerald-50 dark:bg-emerald-950/30",
+                      },
+                      {
+                        label: "Processed",
+                        value: syncProgress?.issues_processed ?? 0,
+                        color: "text-blue-600 dark:text-blue-400",
+                        bg: "bg-blue-50 dark:bg-blue-950/30",
+                      },
+                      {
+                        label: "Skipped",
+                        value: syncProgress?.issues_skipped ?? 0,
+                        color: "text-amber-600 dark:text-amber-400",
+                        bg: "bg-amber-50 dark:bg-amber-950/30",
+                      },
+                      {
+                        label: "Errors",
+                        value: syncProgress?.errors ?? 0,
+                        color: syncProgress?.errors ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
+                        bg: syncProgress?.errors ? "bg-red-50 dark:bg-red-950/30" : "bg-muted/30",
+                      },
+                    ].map((stat) => (
+                      <div key={stat.label} className={`rounded-md ${stat.bg} py-2 px-1 text-center`}>
+                        <div className={`text-base font-bold tabular-nums ${stat.color}`}>
+                          {formatNumber(stat.value)}
+                        </div>
+                        <div className="text-[9px] text-muted-foreground leading-tight">{stat.label}</div>
+                      </div>
+                    ))}
                   </div>
-                  {health.sync.last_result && (
-                    <div className="pt-2 border-t">
-                      <p className="text-[10px] text-muted-foreground mb-1.5">Live progress</p>
-                      <SyncResultBar result={health.sync.last_result} />
+
+                  {/* Status row: phase, project, elapsed, rate */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        <StatusDot active color="yellow" />
+                        {syncProgress?.current_project ? (
+                          <>
+                            <span className="capitalize">
+                              {syncProgress.phase === "embedding" ? "Embedding" :
+                               syncProgress.phase === "comments" ? "Syncing comments" :
+                               syncProgress.phase === "fetching" ? "Fetching issues" : "Working"}
+                            </span>
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono">
+                              {syncProgress.current_project}
+                            </Badge>
+                          </>
+                        ) : (
+                          <span>Initializing sync...</span>
+                        )}
+                      </span>
+                      <span className="tabular-nums font-medium text-foreground">{formatDuration(syncElapsed)}</span>
                     </div>
-                  )}
+                    {/* Project progress + throughput */}
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      {syncProgress && syncProgress.projects_total > 0 ? (
+                        <span>
+                          Project {syncProgress.projects_done + 1} of {syncProgress.projects_total}
+                        </span>
+                      ) : (
+                        <span>&nbsp;</span>
+                      )}
+                      {syncProgress && syncElapsed > 2 && syncProgress.issues_processed > 0 && (
+                        <span className="tabular-nums">
+                          {(syncProgress.issues_processed / syncElapsed).toFixed(1)} issues/sec
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ) : health.sync.last_result ? (
-                <SyncResultBar result={health.sync.last_result} />
+                <div className="space-y-2.5">
+                  <SyncResultBar result={health.sync.last_result} />
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground border-t pt-2">
+                    {health.sync.last_sync ? (
+                      <span>
+                        {(() => {
+                          const d = new Date(health.sync.last_sync)
+                          const now = new Date()
+                          const diffMs = now.getTime() - d.getTime()
+                          const diffMins = Math.floor(diffMs / 60_000)
+                          if (diffMins < 1) return "Ran just now"
+                          if (diffMins < 60) return `Ran ${diffMins}m ago`
+                          const diffHrs = Math.floor(diffMins / 60)
+                          if (diffHrs < 24) return `Ran ${diffHrs}h ago`
+                          const diffDays = Math.floor(diffHrs / 24)
+                          if (diffDays < 7) return `Ran ${diffDays}d ago`
+                          return `Ran ${d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                        })()}
+                      </span>
+                    ) : <span />}
+                    <span className="tabular-nums">
+                      {formatDuration(health.sync.last_result.duration_seconds)}
+                    </span>
+                  </div>
+                </div>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   No sync has been run yet

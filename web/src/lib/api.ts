@@ -229,6 +229,18 @@ export interface SystemHealth {
   sync: SyncStatus
 }
 
+export interface SyncProgress {
+  active: boolean
+  current_project: string | null
+  projects_total: number
+  projects_done: number
+  issues_processed: number
+  issues_embedded: number
+  issues_skipped: number
+  errors: number
+  phase: "idle" | "fetching" | "embedding" | "comments" | "done"
+}
+
 export interface SyncStatus {
   enabled: boolean
   running: boolean
@@ -237,6 +249,7 @@ export interface SyncStatus {
   sync_count: number
   error_count: number
   last_result: SyncLastResult | null
+  progress: SyncProgress | null
 }
 
 export interface SyncLastResult {

@@ -119,6 +119,12 @@ async def get_system_health() -> dict[str, Any]:
             "last_result": None,
         }
 
+    # Attach live progress from active sync engine
+    if _active_sync_engine is not None:
+        sync_info["progress"] = _active_sync_engine.progress
+    else:
+        sync_info["progress"] = None
+
     return {
         "server": server_info,
         "jira": jira_info,
@@ -221,14 +227,23 @@ async def _run_full_sync(
         _active_sync_engine = engine
         if scheduler:
             scheduler._syncing = True
-        await engine.full_sync(
+        result = await engine.full_sync(
             projects=projects,
             start_date=start_date,
             end_date=end_date,
             sync_comments=sync_comments,
         )
+        # Store result on scheduler so "Last Sync Result" is visible in UI
+        if scheduler and result:
+            from datetime import datetime
+
+            scheduler._last_result = result
+            scheduler._last_sync = datetime.utcnow()
+            scheduler._sync_count += 1
     except Exception as e:
         logger.error(f"Background full sync failed: {e}", exc_info=True)
+        if scheduler:
+            scheduler._error_count += 1
     finally:
         _active_sync_engine = None
         if scheduler:
