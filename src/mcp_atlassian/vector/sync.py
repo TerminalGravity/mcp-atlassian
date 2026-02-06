@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -135,6 +137,7 @@ class VectorSyncEngine:
         self.store = LanceDBStore(config=self.config)
         self.embedder = EmbeddingPipeline(config=self.config)
         self._state_path = self.config.db_path / "sync_state.json"
+        self._cancelled = False
 
     def _load_state(self) -> SyncState:
         """Load sync state from disk."""
@@ -144,15 +147,30 @@ class VectorSyncEngine:
         """Save sync state to disk."""
         state.save(self._state_path)
 
+    def cancel(self) -> None:
+        """Request cancellation of a running sync."""
+        self._cancelled = True
+        logger.info("Sync cancellation requested")
+
+    @property
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested."""
+        return self._cancelled
+
     async def full_sync(
         self,
         projects: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> SyncResult:
         """Perform a full sync of all issues.
 
         Args:
             projects: List of project keys to sync. If None, syncs all
                       projects from config or all accessible projects.
+            start_date: Optional start date filter (YYYY-MM-DD). If None,
+                        defaults to 1 year lookback.
+            end_date: Optional end date filter (YYYY-MM-DD).
 
         Returns:
             SyncResult with statistics
@@ -173,9 +191,18 @@ class VectorSyncEngine:
         logger.info(f"Starting full sync for projects: {projects_to_sync}")
 
         for project_key in projects_to_sync:
+            if self._cancelled:
+                logger.info("Full sync cancelled before starting project %s", project_key)
+                result.errors.append("Sync cancelled by user")
+                break
+
             try:
                 project_result = await self._sync_project(
-                    project_key, incremental=False, state=state
+                    project_key,
+                    incremental=False,
+                    state=state,
+                    start_date=start_date,
+                    end_date=end_date,
                 )
                 result.issues_processed += project_result.issues_processed
                 result.issues_embedded += project_result.issues_embedded
@@ -239,6 +266,11 @@ class VectorSyncEngine:
         )
 
         for project_key in projects_to_sync:
+            if self._cancelled:
+                logger.info("Incremental sync cancelled before project %s", project_key)
+                result.errors.append("Sync cancelled by user")
+                break
+
             try:
                 project_result = await self._sync_project(
                     project_key, incremental=True, state=state
@@ -343,6 +375,8 @@ class VectorSyncEngine:
         project_key: str,
         incremental: bool,
         state: SyncState,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> SyncResult:
         """Sync a single project.
 
@@ -350,6 +384,8 @@ class VectorSyncEngine:
             project_key: Project key to sync
             incremental: Whether this is an incremental sync
             state: Current sync state
+            start_date: Optional start date filter (YYYY-MM-DD)
+            end_date: Optional end date filter (YYYY-MM-DD)
 
         Returns:
             SyncResult for this project
@@ -371,11 +407,21 @@ class VectorSyncEngine:
                 f"ORDER BY updated ASC"
             )
         else:
-            # Only sync issues updated since 2022. Use ORDER BY key for stable
-            # pagination (updated DESC causes duplicates as issues change)
+            # Build date filter: use provided start_date or default to 1 year lookback
+            if start_date:
+                date_filter = f'AND updated >= "{start_date}"'
+            else:
+                one_year_ago = (datetime.utcnow().replace(day=1, month=1, hour=0, minute=0, second=0)
+                              - relativedelta(years=1))
+                date_filter = f'AND updated >= "{one_year_ago.strftime("%Y-%m-%d")}"'
+
+            if end_date:
+                date_filter += f' AND updated <= "{end_date}"'
+
+            # Use ORDER BY key for stable pagination (updated DESC causes duplicates)
             jql = (
                 f'project = "{project_key}" '
-                f'AND updated >= "2022-01-01" ORDER BY key DESC'
+                f'{date_filter} ORDER BY key DESC'
             )
 
         logger.info(f"Syncing project {project_key} with JQL: {jql}")
@@ -389,6 +435,11 @@ class VectorSyncEngine:
         last_key: str | None = None  # For key-based pagination
 
         while True:
+            if self._cancelled:
+                logger.info("Sync cancelled during project %s (processed %d)", project_key, result.issues_processed)
+                result.errors.append("Sync cancelled by user")
+                break
+
             try:
                 # Use key-based pagination: fetch issues with key < last_key
                 # Insert the key filter before ORDER BY clause
@@ -403,12 +454,27 @@ class VectorSyncEngine:
                 else:
                     current_jql = jql
 
-                search_result = self.jira.search_issues(
-                    jql=current_jql,
-                    fields="*all",
-                    start=0,  # Always start from 0, use key filter for pagination
-                    limit=1000,  # Fetch more per call, internal pagination handles it
-                )
+                # Retry with exponential backoff for transient errors
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        search_result = self.jira.search_issues(
+                            jql=current_jql,
+                            fields="*all",
+                            start=0,  # Always start from 0, use key filter for pagination
+                            limit=100,  # Reduced from 1000 to avoid overwhelming Jira API
+                        )
+                        break  # Success, exit retry loop
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                            logger.warning(
+                                f"API error (attempt {attempt + 1}/{max_retries}): {e}. "
+                                f"Retrying in {wait_time}s..."
+                            )
+                            await asyncio.sleep(wait_time)
+                        else:
+                            raise  # Max retries exceeded, propagate error
 
                 if not search_result.issues:
                     break
@@ -475,7 +541,7 @@ class VectorSyncEngine:
                     issues_to_embed = {}
 
                 # Check if we got fewer results than requested (last page)
-                if len(search_result.issues) < 1000:
+                if len(search_result.issues) < 100:
                     break
 
             except Exception as e:
