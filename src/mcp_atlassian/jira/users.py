@@ -90,10 +90,10 @@ class UsersMixin(JiraClient):
 
     def _get_account_id(self, assignee: str) -> str:
         """
-        Get the account ID for a username or account ID.
+        Get the account ID for a username, email, or account ID.
 
         Args:
-            assignee (str): Username or account ID.
+            assignee (str): Username, email, displayName, or account ID.
 
         Returns:
             str: Account ID.
@@ -101,8 +101,29 @@ class UsersMixin(JiraClient):
         Raises:
             ValueError: If the account ID could not be found.
         """
-        # If it looks like an account ID already, return it
-        if assignee.startswith("5") and len(assignee) >= 10:
+        # If it already looks like an account ID, pass through without a
+        # user-directory lookup. Atlassian Cloud account IDs come in three
+        # observed formats:
+        #   * legacy:        '557058:...' or similar — starts with digits,
+        #                    10+ chars, no '@' / whitespace
+        #   * 24-hex:        e.g. '6356a6b4b0b6ef035648d5c7' (24 lowercase
+        #                    hex chars; the modern format for non-tenant
+        #                    accounts)
+        #   * tenant-scoped: '<digits>:<uuid>' e.g.
+        #                    '712020:accafac9-6b1a-48cb-a1f4-8ba2f4997d39'
+        if (
+            "@" not in assignee
+            and " " not in assignee
+            and len(assignee) >= 10
+            and (
+                # tenant-scoped: digits then colon then a UUID-ish blob
+                re.match(r"^\d+:[0-9a-fA-F-]+$", assignee)
+                # 24+ hex characters
+                or re.match(r"^[0-9a-f]{24,}$", assignee)
+                # legacy format: leading '5' (kept for back-compat)
+                or assignee.startswith("5")
+            )
+        ):
             return assignee
 
         account_id = self._lookup_user_directly(assignee)
