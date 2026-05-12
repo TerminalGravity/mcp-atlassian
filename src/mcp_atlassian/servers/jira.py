@@ -1044,6 +1044,29 @@ async def create_issue(
             default=None,
         ),
     ] = None,
+    return_mode: Annotated[
+        str,
+        Field(
+            description=(
+                "Response size: 'summary' (default — key + url + a few shaped "
+                "fields), 'minimal' (key + url + message only), or 'full' "
+                "(legacy: complete issue payload). New tickets created via "
+                "this tool are small by definition, but consistency with the "
+                "other write tools keeps callers' code uniform."
+            ),
+            default="summary",
+        ),
+    ] = "summary",
+    response_fields: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Comma-separated fields to include when return_mode='summary'. "
+                "Examples: key,summary,status,assignee,updated"
+            ),
+            default=None,
+        ),
+    ] = None,
 ) -> str:
     """Create a new Jira issue.
 
@@ -1102,11 +1125,12 @@ async def create_issue(
         components=components_list,
         **extra_fields,
     )
-    result = issue.to_simplified_dict()
-    return json.dumps(
-        {"message": "Issue created successfully", "issue": result},
-        indent=2,
-        ensure_ascii=False,
+    return _operation_response(
+        jira,
+        message="Issue created successfully",
+        issue=issue,
+        return_mode=return_mode,
+        response_fields=response_fields,
     )
 
 
@@ -1291,6 +1315,28 @@ async def update_issue(
             default=None,
         ),
     ] = None,
+    return_mode: Annotated[
+        str,
+        Field(
+            description=(
+                "Response size: 'summary' (default — key + url + a few shaped "
+                "fields), 'minimal' (key + url + message only), or 'full' "
+                "(legacy: complete issue payload). Big descriptions can blow "
+                "past harness token limits on 'full'."
+            ),
+            default="summary",
+        ),
+    ] = "summary",
+    response_fields: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Comma-separated fields to include when return_mode='summary'. "
+                "Examples: key,summary,status,assignee,updated"
+            ),
+            default=None,
+        ),
+    ] = None,
 ) -> str:
     """Update an existing Jira issue including changing status, adding Epic links, updating fields, etc.
 
@@ -1300,9 +1346,15 @@ async def update_issue(
         fields: Dictionary of fields to update.
         additional_fields: Optional dictionary of additional fields.
         attachments: Optional JSON array string or comma-separated list of file paths.
+        return_mode: Response payload size — 'summary' (default), 'minimal',
+            or 'full'.
+        response_fields: Optional comma-separated field allowlist when
+            return_mode='summary'.
 
     Returns:
-        JSON string representing the updated issue object and attachment results.
+        JSON string with the shaped operation result (key + url + message,
+        plus the issue payload when return_mode != 'minimal'). Attachment
+        results are always preserved on the result envelope when present.
 
     Raises:
         ValueError: If in read-only mode or Jira client unavailable, or invalid input.
@@ -1345,16 +1397,21 @@ async def update_issue(
 
     try:
         issue = jira.update_issue(issue_key=issue_key, **all_updates)
-        result = issue.to_simplified_dict()
+        extra: dict[str, Any] | None = None
         if (
-            hasattr(issue, "custom_fields")
+            issue is not None
+            and hasattr(issue, "custom_fields")
             and "attachment_results" in issue.custom_fields
         ):
-            result["attachment_results"] = issue.custom_fields["attachment_results"]
-        return json.dumps(
-            {"message": "Issue updated successfully", "issue": result},
-            indent=2,
-            ensure_ascii=False,
+            extra = {"attachment_results": issue.custom_fields["attachment_results"]}
+        return _operation_response(
+            jira,
+            message="Issue updated successfully",
+            issue=issue,
+            issue_key=issue_key,
+            return_mode=return_mode,
+            response_fields=response_fields,
+            extra=extra,
         )
     except Exception as e:
         logger.error(f"Error updating issue {issue_key}: {str(e)}", exc_info=True)
@@ -1878,6 +1935,28 @@ async def transition_issue(
             ),
         ),
     ] = None,
+    return_mode: Annotated[
+        str,
+        Field(
+            description=(
+                "Response size: 'summary' (default — key + url + a few shaped "
+                "fields), 'minimal' (key + url + message only), or 'full' "
+                "(legacy: complete issue payload). Big descriptions can blow "
+                "past harness token limits on 'full'."
+            ),
+            default="summary",
+        ),
+    ] = "summary",
+    response_fields: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Comma-separated fields to include when return_mode='summary'. "
+                "Examples: key,summary,status,assignee,updated"
+            ),
+            default=None,
+        ),
+    ] = None,
 ) -> str:
     """Transition a Jira issue to a new status.
 
@@ -1887,9 +1966,14 @@ async def transition_issue(
         transition_id: ID of the transition.
         fields: Optional dictionary of fields to update during transition.
         comment: Optional comment for the transition.
+        return_mode: Response payload size — 'summary' (default), 'minimal',
+            or 'full'.
+        response_fields: Optional comma-separated field allowlist when
+            return_mode='summary'.
 
     Returns:
-        JSON string representing the updated issue object.
+        JSON string with the shaped operation result (key + url + message,
+        plus the issue payload when return_mode != 'minimal').
 
     Raises:
         ValueError: If required fields missing, invalid input, in read-only mode, or Jira client unavailable.
@@ -1910,11 +1994,14 @@ async def transition_issue(
         comment=comment,
     )
 
-    result = {
-        "message": f"Issue {issue_key} transitioned successfully",
-        "issue": issue.to_simplified_dict() if issue else None,
-    }
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _operation_response(
+        jira,
+        message=f"Issue {issue_key} transitioned successfully",
+        issue=issue,
+        issue_key=issue_key,
+        return_mode=return_mode,
+        response_fields=response_fields,
+    )
 
 
 @jira_mcp.tool(
