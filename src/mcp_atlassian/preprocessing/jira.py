@@ -255,49 +255,52 @@ class JiraPreprocessor(BasePreprocessor):
         if self.disable_translation:
             return input_text
 
-        # Save code blocks to prevent recursive processing
-        code_blocks = []
-        inline_codes = []
+        # Save code blocks to prevent recursive processing.
+        # Use placeholders so subsequent regex passes (headers, bullets, etc.)
+        # cannot mangle the protected content's internals.
+        protected_blocks: list[str] = []
 
-        # Extract code blocks
-        def save_code_block(match: re.Match) -> str:
-            """
-            Process and save a code block.
+        def _stash(raw: str) -> str:
+            protected_blocks.append(raw)
+            return f"\x00PROTECTED_BLOCK_{len(protected_blocks) - 1}\x00"
 
-            Args:
-                match: Regex match object containing the code block
+        # Stash already-Wiki code/noformat blocks verbatim. Caller-supplied Wiki
+        # syntax must survive untouched — otherwise YAML / shell list items
+        # inside the block get rewritten as Jira bullets.
+        output = re.sub(
+            r"\{code(?::[^}]*)?\}[\s\S]*?\{code\}",
+            lambda m: _stash(m.group(0)),
+            input_text,
+        )
+        output = re.sub(
+            r"\{noformat\}[\s\S]*?\{noformat\}",
+            lambda m: _stash(m.group(0)),
+            output,
+        )
 
-            Returns:
-                Jira-formatted code block
-            """
+        # Stash Markdown ```lang fences after converting the wrapper to Wiki.
+        def _stash_md_fence(match: re.Match) -> str:
             syntax = match.group(1) or ""
             content = match.group(2)
-            code = "{code"
+            wiki = "{code"
             if syntax:
-                code += ":" + syntax
-            code += "}" + content + "{code}"
-            code_blocks.append(code)
-            return str(code)  # Ensure we return a string
+                wiki += ":" + syntax
+            wiki += "}" + content + "{code}"
+            return _stash(wiki)
 
-        # Extract inline code
-        def save_inline_code(match: re.Match) -> str:
-            """
-            Process and save inline code.
+        output = re.sub(r"```(\w*)\n([\s\S]+?)```", _stash_md_fence, output)
 
-            Args:
-                match: Regex match object containing the inline code
-
-            Returns:
-                Jira-formatted inline code
-            """
-            content = match.group(1)
-            code = "{{" + content + "}}"
-            inline_codes.append(code)
-            return str(code)  # Ensure we return a string
-
-        # Save code sections temporarily
-        output = re.sub(r"```(\w*)\n([\s\S]+?)```", save_code_block, input_text)
-        output = re.sub(r"`([^`]+)`", save_inline_code, output)
+        # Stash inline code (Markdown ` ` and Wiki {{ }} forms).
+        output = re.sub(
+            r"`([^`]+)`",
+            lambda m: _stash("{{" + m.group(1) + "}}"),
+            output,
+        )
+        output = re.sub(
+            r"\{\{[^{}]+?\}\}",
+            lambda m: _stash(m.group(0)),
+            output,
+        )
 
         # Headers with = or - underlines
         output = re.sub(
@@ -402,6 +405,13 @@ class JiraPreprocessor(BasePreprocessor):
 
         # Rejoin the lines
         output = "\n".join(lines)
+
+        # Restore protected blocks. Reverse order so a higher-index placeholder
+        # restored first cannot reintroduce a lower-index placeholder string.
+        for i in range(len(protected_blocks) - 1, -1, -1):
+            output = output.replace(
+                f"\x00PROTECTED_BLOCK_{i}\x00", protected_blocks[i]
+            )
 
         return output
 
