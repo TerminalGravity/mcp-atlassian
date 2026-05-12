@@ -1690,6 +1690,27 @@ async def link_to_epic(
     epic_key: Annotated[
         str, Field(description="The key of the epic to link to (e.g., 'PROJ-456')")
     ],
+    return_mode: Annotated[
+        str,
+        Field(
+            description=(
+                "Response size: 'summary' (default — key + url + a few shaped "
+                "fields), 'minimal' (key + url + message only), or 'full' "
+                "(legacy: complete issue payload)."
+            ),
+            default="summary",
+        ),
+    ] = "summary",
+    response_fields: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Comma-separated fields to include when return_mode='summary'. "
+                "Examples: key,summary,status,assignee,updated"
+            ),
+            default=None,
+        ),
+    ] = None,
 ) -> str:
     """Link an existing issue to an epic.
 
@@ -1697,20 +1718,27 @@ async def link_to_epic(
         ctx: The FastMCP context.
         issue_key: The key of the issue to link.
         epic_key: The key of the epic to link to.
+        return_mode: Response payload size — 'summary' (default), 'minimal',
+            or 'full'.
+        response_fields: Optional comma-separated field allowlist when
+            return_mode='summary'.
 
     Returns:
-        JSON string representing the updated issue object.
+        JSON string with the shaped operation result.
 
     Raises:
         ValueError: If in read-only mode or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
     issue = jira.link_issue_to_epic(issue_key, epic_key)
-    result = {
-        "message": f"Issue {issue_key} has been linked to epic {epic_key}.",
-        "issue": issue.to_simplified_dict(),
-    }
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _operation_response(
+        jira,
+        message=f"Issue {issue_key} has been linked to epic {epic_key}.",
+        issue=issue,
+        issue_key=issue_key,
+        return_mode=return_mode,
+        response_fields=response_fields,
+    )
 
 
 @jira_mcp.tool(
