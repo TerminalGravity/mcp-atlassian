@@ -1245,6 +1245,92 @@ class IssuesMixin(
             logger.error(msg)
             raise Exception(msg) from e
 
+    def assign_issue(
+        self, issue_key: str, assignee: str | None
+    ) -> tuple[str | None, str | None]:
+        """
+        Set the assignee on a Jira issue via the dedicated
+        ``PUT /rest/api/3/issue/{key}/assignee`` endpoint. Returns
+        ``(prior_display_name, new_display_name)`` so callers can confirm
+        the change without re-fetching the whole issue.
+
+        Args:
+            issue_key: The key of the issue to assign.
+            assignee: Email, displayName, or accountId of the assignee.
+                Pass ``None`` or an empty string to unassign.
+
+        Returns:
+            Tuple ``(prior_assignee_display, new_assignee_display)``.
+            Either may be ``None`` when unassigned or when the field is
+            not present on the read-back response.
+
+        Raises:
+            ValueError: If the assignee identifier cannot be resolved to
+                an account.
+            Exception: If the underlying Jira API call fails.
+        """
+        # Read the prior assignee for the response payload.
+        prior_display: str | None = None
+        try:
+            prior_raw = self.jira.get_issue(
+                issue_key,
+                fields="assignee",
+                expand=None,
+            )
+            prior_fields = (prior_raw or {}).get("fields", {}) or {}
+            prior_assignee_obj = prior_fields.get("assignee") or {}
+            if isinstance(prior_assignee_obj, dict):
+                prior_display = prior_assignee_obj.get(
+                    "displayName"
+                ) or prior_assignee_obj.get("name")
+        except Exception as e:
+            # Don't fail the assign just because the read-back lookup
+            # failed; the write itself is the contract.
+            logger.debug(
+                f"assign_issue: prior-assignee lookup failed for {issue_key}: {e}"
+            )
+
+        # Resolve identifier → accountId (Cloud) or username (Server/DC).
+        # Empty string / None means "unassign".
+        account_id: str | None = None
+        if assignee:
+            try:
+                account_id = self._get_account_id(assignee)
+            except Exception as e:
+                raise ValueError(
+                    f"Could not resolve assignee '{assignee}' to an account: {e}"
+                ) from e
+
+        # Direct API call — avoids the silent no-op pattern that the
+        # general update_issue path can hit on assignee writes.
+        try:
+            self.jira.assign_issue(issue_key, account_id)
+        except Exception as e:
+            msg = f"Error assigning issue {issue_key} to '{assignee}': {str(e)}"
+            logger.error(msg)
+            raise Exception(msg) from e
+
+        # Read back the new assignee (small request, single field).
+        new_display: str | None = None
+        try:
+            new_raw = self.jira.get_issue(
+                issue_key,
+                fields="assignee",
+                expand=None,
+            )
+            new_fields = (new_raw or {}).get("fields", {}) or {}
+            new_assignee_obj = new_fields.get("assignee") or {}
+            if isinstance(new_assignee_obj, dict):
+                new_display = new_assignee_obj.get(
+                    "displayName"
+                ) or new_assignee_obj.get("name")
+        except Exception as e:
+            logger.debug(
+                f"assign_issue: new-assignee read-back failed for {issue_key}: {e}"
+            )
+
+        return prior_display, new_display
+
     def _log_available_fields(self, fields: list[dict]) -> None:
         """
         Log available fields for debugging.

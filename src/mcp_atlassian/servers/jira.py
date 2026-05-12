@@ -23,6 +23,134 @@ jira_mcp = FastMCP(
 )
 
 
+SUMMARY_FIELDS = ["summary", "status", "priority", "assignee", "issuetype", "updated"]
+
+
+def _json(data: Any) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def _parse_csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _issue_url(jira: Any, issue_key: str) -> str:
+    return f"{jira.config.url.rstrip('/')}/browse/{issue_key}"
+
+
+def _field_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        for key in ("displayName", "name", "value", "key", "id"):
+            if value.get(key) is not None:
+                return value.get(key)
+    return value
+
+
+def _shape_issue_dict(
+    issue: dict[str, Any] | None,
+    *,
+    return_mode: str = "summary",
+    response_fields: str | None = None,
+) -> dict[str, Any] | None:
+    if issue is None:
+        return None
+    if return_mode == "full":
+        return issue
+
+    key = issue.get("key")
+    shaped: dict[str, Any] = {
+        "key": key,
+        "url": issue.get("url"),
+    }
+
+    fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
+    if return_mode == "minimal":
+        return {k: v for k, v in shaped.items() if v is not None}
+
+    wanted = _parse_csv(response_fields) or SUMMARY_FIELDS
+    for field in wanted:
+        if field == "key":
+            shaped["key"] = key
+        elif field == "url":
+            shaped["url"] = issue.get("url")
+        elif field in issue:
+            shaped[field] = issue[field]
+        elif field in fields:
+            shaped[field] = _field_value(fields[field])
+
+    return {k: v for k, v in shaped.items() if v is not None}
+
+
+def _shape_issue_model(
+    jira: Any,
+    issue: Any,
+    *,
+    return_mode: str = "summary",
+    response_fields: str | None = None,
+) -> dict[str, Any] | None:
+    if issue is None:
+        return None
+    raw = issue.to_simplified_dict()
+    if raw.get("key") and not raw.get("url"):
+        raw["url"] = _issue_url(jira, raw["key"])
+    if return_mode == "full":
+        return raw
+    compressed = ResponseFormatter.compress_issue(raw, include_description=False)
+    if compressed.get("key") and not compressed.get("url"):
+        compressed["url"] = _issue_url(jira, compressed["key"])
+    return _shape_issue_dict(
+        compressed, return_mode=return_mode, response_fields=response_fields
+    )
+
+
+def _operation_response(
+    jira: Any,
+    *,
+    message: str,
+    issue: Any = None,
+    issue_key: str | None = None,
+    return_mode: str = "summary",
+    response_fields: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    result: dict[str, Any] = {"message": message}
+    key = issue_key
+    if issue is not None:
+        shaped = _shape_issue_model(
+            jira,
+            issue,
+            return_mode=return_mode,
+            response_fields=response_fields,
+        )
+        if shaped:
+            key = shaped.get("key") or key
+            result["issue"] = shaped
+    if key:
+        result["key"] = key
+        result["url"] = _issue_url(jira, key)
+    if extra:
+        result.update(extra)
+    return _json(result)
+
+
+def _find_transition(
+    transitions: list[dict[str, Any]], target_status: str
+) -> dict[str, Any] | None:
+    target = target_status.casefold()
+    for transition in transitions:
+        if str(transition.get("to_status", "")).casefold() == target:
+            return transition
+        to_data = transition.get("to")
+        if isinstance(to_data, dict) and str(to_data.get("name", "")).casefold() == target:
+            return transition
+    for transition in transitions:
+        if str(transition.get("name", "")).casefold() == target:
+            return transition
+    return None
+
+
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},
@@ -135,6 +263,20 @@ async def get_issue(
             default=True,
         ),
     ] = True,
+    return_mode: Annotated[
+        str,
+        Field(
+            description="Response size mode: 'summary' (default), 'minimal', or 'full'. Use full for the legacy complete payload.",
+            default="summary",
+        ),
+    ] = "summary",
+    response_fields: Annotated[
+        str | None,
+        Field(
+            description="Comma-separated fields to include when return_mode is summary. Examples: key,summary,status,assignee,updated",
+            default=None,
+        ),
+    ] = None,
 ) -> str:
     """Get details of a specific Jira issue including its Epic links and relationship information.
 
@@ -166,8 +308,13 @@ async def get_issue(
         properties=properties.split(",") if properties else None,
         update_history=update_history,
     )
-    result = issue.to_simplified_dict()
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    result = _shape_issue_model(
+        jira,
+        issue,
+        return_mode=return_mode,
+        response_fields=response_fields,
+    )
+    return _json(result)
 
 
 @jira_mcp.tool(
@@ -375,7 +522,7 @@ async def list_issues(
     if conditions:
         jql += " ORDER BY updated DESC"
 
-    search_result = jira.search(
+    search_result = jira.search_issues(
         jql=jql,
         fields=["summary", "status", "priority", "assignee", "issuetype", "updated"],
         limit=limit,
@@ -1212,6 +1359,91 @@ async def update_issue(
     except Exception as e:
         logger.error(f"Error updating issue {issue_key}: {str(e)}", exc_info=True)
         raise ValueError(f"Failed to update issue {issue_key}: {str(e)}")
+
+
+@jira_mcp.tool(
+    tags={"jira", "write"},
+    annotations={
+        "title": "Assign Issue",
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+)
+@check_write_access
+async def assign_issue(
+    ctx: Context,
+    issue_key: Annotated[
+        str, Field(description="Jira issue key (e.g., 'PROJ-123')")
+    ],
+    assignee: Annotated[
+        str,
+        Field(
+            description=(
+                "Assignee identifier — email, displayName, or accountId. "
+                "Pass an empty string to unassign. The tool resolves "
+                "email/displayName to the correct accountId (Cloud) or "
+                "username (Server/DC) before the write."
+            )
+        ),
+    ],
+) -> str:
+    """Set the assignee on a Jira issue with a minimal response payload.
+
+    Use this instead of ``jira_update_issue`` for assignee-only writes —
+    the general update path can silently no-op on assignee in some
+    configurations, and the Atlassian-hosted ``editJiraIssue`` echoes
+    the entire issue JSON back (which exceeds harness token limits when
+    the touched ticket carries a large description).
+
+    Args:
+        ctx: The FastMCP context.
+        issue_key: Jira issue key.
+        assignee: Email, displayName, or accountId. Empty string unassigns.
+
+    Returns:
+        JSON object with shape::
+
+            {
+              "success": true,
+              "message": "Issue PROJ-123 assignee updated",
+              "key": "PROJ-123",
+              "url": "https://.../browse/PROJ-123",
+              "prior_assignee": "Jack Felke",
+              "new_assignee": "Suhrob Ulmasov (Stan)"
+            }
+
+    Raises:
+        ValueError: If ``issue_key`` is missing, the assignee cannot be
+            resolved, in read-only mode, or the Jira client is
+            unavailable.
+    """
+    jira = await get_jira_fetcher(ctx)
+    if not issue_key:
+        raise ValueError("issue_key is required.")
+    # ``assignee`` is allowed to be the empty string (unassign).
+
+    try:
+        prior_display, new_display = jira.assign_issue(issue_key, assignee or None)
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error assigning issue {issue_key} to '{assignee}': {str(e)}",
+            exc_info=True,
+        )
+        raise ValueError(
+            f"Failed to assign issue {issue_key}: {str(e)}"
+        ) from e
+
+    result = {
+        "success": True,
+        "message": f"Issue {issue_key} assignee updated",
+        "key": issue_key,
+        "url": _issue_url(jira, issue_key),
+        "prior_assignee": prior_display,
+        "new_assignee": new_display,
+    }
+    return _json(result)
 
 
 @jira_mcp.tool(
