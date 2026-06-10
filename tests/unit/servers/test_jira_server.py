@@ -475,6 +475,9 @@ async def test_create_issue(jira_client, mock_jira_fetcher):
             "description": "This is a new task",
             "components": "Frontend,API",
             "additional_fields": {"priority": {"name": "Medium"}},
+            # summary is the default (D2 token-bloat fix); the full echo this
+            # test asserts is now opt-in.
+            "return_mode": "full",
         },
     )
     assert hasattr(response, "content")
