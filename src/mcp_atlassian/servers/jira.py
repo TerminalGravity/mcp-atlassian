@@ -245,9 +245,18 @@ def _truncate_tagged(text: str | None, limit: int) -> str | None:
 
 
 def _issue_card(
-    jira: Any, issue: Any, *, response_format: str = "summary"
+    jira: Any,
+    issue: Any,
+    *,
+    response_format: str = "summary",
+    extras_from_raw: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Token-budgeted issue view. summary ≈ 1 KB regardless of issue size."""
+    """Token-budgeted issue view. summary ≈ 1 KB regardless of issue size.
+
+    extras_from_raw: top-level keys copied verbatim from the simplified dict
+    into the summary card after compression (e.g. 'changelogs', which
+    compress_issue would otherwise drop).
+    """
     raw = issue.to_simplified_dict()
     if raw.get("key") and not raw.get("url"):
         raw["url"] = _issue_url(jira, raw["key"])
@@ -255,6 +264,9 @@ def _issue_card(
         return raw
 
     card = ResponseFormatter.compress_issue(raw, include_description=False)
+    for extra_key in extras_from_raw:
+        if raw.get(extra_key) is not None:
+            card[extra_key] = raw[extra_key]
     card["url"] = raw.get("url")
     if raw.get("description"):
         card["description"] = _truncate_tagged(raw["description"], 400)
@@ -372,7 +384,14 @@ async def get(
                 properties=None,
                 update_history=False,
             )
-            card = _issue_card(jira, issue, response_format=response_format)
+            card = _issue_card(
+                jira,
+                issue,
+                response_format=response_format,
+                extras_from_raw=(
+                    ("changelogs",) if "changelog" in includes else ()
+                ),
+            )
             if "dates" in includes:
                 try:
                     card["dates"] = jira.get_issue_dates(
@@ -398,6 +417,7 @@ async def get(
                     card["sla"] = {"error": str(e)}
             out[key] = card
         except Exception as e:
+            logger.warning(f"jira_get: {key} failed: {e}")
             out[key] = {"error": str(e)}
     return _json(out)
 

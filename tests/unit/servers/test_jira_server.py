@@ -1313,3 +1313,94 @@ async def test_jira_get_rejects_bad_include(jira_client):
         await jira_client.call_tool(
             "jira_get", {"keys": "TEST-123", "include": "bogus"}
         )
+
+
+def test_issue_card_extras_from_raw_carries_changelogs():
+    issue = _StubIssue(
+        {
+            "key": "DS-1",
+            "summary": "s",
+            "changelogs": [
+                {
+                    "created": "c",
+                    "items": [
+                        {"field": "status", "from": "To Do", "to": "In Progress"}
+                    ],
+                }
+            ],
+        }
+    )
+    card = _issue_card(
+        _StubJira(), issue, response_format="summary", extras_from_raw=("changelogs",)
+    )
+    assert card["changelogs"] == [
+        {
+            "created": "c",
+            "items": [{"field": "status", "from": "To Do", "to": "In Progress"}],
+        }
+    ]
+    # without the opt-in, summary mode must not carry changelogs
+    card_plain = _issue_card(_StubJira(), issue, response_format="summary")
+    assert "changelogs" not in card_plain
+
+
+@pytest.mark.anyio
+async def test_jira_get_include_changelog_summary_mode(jira_client, mock_jira_fetcher):
+    """include='changelog' must surface changelogs even in summary mode."""
+
+    def mock_get_issue_with_changelogs(
+        issue_key,
+        fields=None,
+        expand=None,
+        comment_limit=10,
+        properties=None,
+        update_history=True,
+    ):
+        mock_issue = MagicMock()
+        data = {
+            "key": issue_key,
+            "summary": "Test Issue Summary",
+            "status": {"name": "In Progress"},
+        }
+        if expand == "changelog":
+            data["changelogs"] = [
+                {
+                    "created": "c",
+                    "items": [
+                        {"field": "status", "from": "To Do", "to": "In Progress"}
+                    ],
+                }
+            ]
+        mock_issue.to_simplified_dict.return_value = data
+        return mock_issue
+
+    mock_jira_fetcher.get_issue.side_effect = mock_get_issue_with_changelogs
+
+    response = await jira_client.call_tool(
+        "jira_get", {"keys": "TEST-123", "include": "changelog"}
+    )
+    content = json.loads(response.content[0].text)
+    assert "changelogs" in content["TEST-123"]
+    assert content["TEST-123"]["changelogs"][0]["items"][0]["field"] == "status"
+
+
+@pytest.mark.anyio
+async def test_jira_get_per_key_isolation(jira_client, mock_jira_fetcher):
+    """One bad key never fails the batch — good keys still return cards."""
+    original_side_effect = mock_jira_fetcher.get_issue.side_effect
+
+    def mock_get_issue_one_bad(issue_key, **kwargs):
+        if issue_key == "TEST-BAD":
+            raise ValueError("Issue does not exist")
+        return original_side_effect(issue_key, **kwargs)
+
+    mock_jira_fetcher.get_issue.side_effect = mock_get_issue_one_bad
+
+    response = await jira_client.call_tool(
+        "jira_get", {"keys": "TEST-123,TEST-BAD"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["TEST-123"]["key"] == "TEST-123"
+    assert content["TEST-123"]["summary"] == "Test Issue Summary"
+    assert "error" in content["TEST-BAD"]
+    assert "does not exist" in content["TEST-BAD"]["error"]
