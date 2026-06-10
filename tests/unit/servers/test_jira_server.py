@@ -301,6 +301,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         remove_issue_link,
         search,
         search_fields,
+        transition,
         transition_issue,
         update_issue,
         update_sprint,
@@ -334,6 +335,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     jira_sub_mcp.add_tool(link_to_epic)
     jira_sub_mcp.add_tool(create_issue_link)
     jira_sub_mcp.add_tool(remove_issue_link)
+    jira_sub_mcp.add_tool(transition)
     jira_sub_mcp.add_tool(transition_issue)
     jira_sub_mcp.add_tool(update_sprint)
     jira_sub_mcp.add_tool(batch_create_versions)
@@ -1498,3 +1500,65 @@ async def test_jira_find_rejects_bogus_mode(jira_client):
 async def test_jira_find_requires_query_or_similar_to(jira_client):
     with pytest.raises(Exception, match="query"):
         await jira_client.call_tool("jira_find", {})
+
+
+# --- v2 surface: jira_transition -------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_transition_single_by_name(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_available_transitions.return_value = [
+        {"id": "41", "name": "Ready for QA", "to_status": "Ready for QA"},
+    ]
+    mock_issue = MagicMock()
+    mock_issue.to_simplified_dict.return_value = {
+        "key": "TEST-123",
+        "status": {"name": "Ready for QA"},
+    }
+    mock_jira_fetcher.transition_issue.return_value = mock_issue
+    response = await jira_client.call_tool(
+        "jira_transition", {"keys": "TEST-123", "to_status": "ready for qa"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-123"
+    assert "next_transitions" in content
+    mock_jira_fetcher.transition_issue.assert_called_once()
+    _, kwargs = mock_jira_fetcher.transition_issue.call_args
+    assert kwargs["transition_id"] == "41"
+
+
+@pytest.mark.anyio
+async def test_jira_transition_batch(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_available_transitions.return_value = [
+        {"id": "41", "name": "Done", "to_status": "Done"},
+    ]
+    response = await jira_client.call_tool(
+        "jira_transition", {"keys": "TEST-1,TEST-2,TEST-3", "to_status": "Done"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["summary"]["total"] == 3
+    assert content["summary"]["ok"] == 3
+    assert mock_jira_fetcher.transition_issue.call_count == 3
+
+
+@pytest.mark.anyio
+async def test_jira_transition_invalid_name_lists_options(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_available_transitions.return_value = [
+        {"id": "41", "name": "Done", "to_status": "Done"},
+    ]
+    with pytest.raises(Exception, match="Done"):
+        await jira_client.call_tool(
+            "jira_transition", {"keys": "TEST-123", "to_status": "Nonexistent"}
+        )
+
+
+@pytest.mark.anyio
+async def test_jira_transition_rejects_bogus_return_mode(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_available_transitions.return_value = [
+        {"id": "41", "name": "Done", "to_status": "Done"},
+    ]
+    with pytest.raises(Exception, match="return_mode"):
+        await jira_client.call_tool(
+            "jira_transition",
+            {"keys": "TEST-123", "to_status": "Done", "return_mode": "bogus"},
+        )

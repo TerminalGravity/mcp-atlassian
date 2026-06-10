@@ -557,6 +557,110 @@ async def find(
 
 
 @jira_mcp.tool(
+    tags={"jira", "write"},
+    annotations={"title": "Transition Issues", "destructiveHint": True},
+)
+@check_write_access
+async def transition(
+    ctx: Context,
+    keys: Annotated[
+        str,
+        Field(description="One issue key or comma-separated keys to move to the same status."),
+    ],
+    to_status: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Target status NAME, e.g. 'Ready for QA' or 'In Progress'. "
+                "Case-insensitive; resolved server-side per key — never look up "
+                "transition ids yourself. On no match the error lists every "
+                "valid name. Provide this OR transition_id."
+            ),
+            default=None,
+        ),
+    ] = None,
+    transition_id: Annotated[
+        str | None,
+        Field(description="(Optional) Raw transition id; prefer to_status.", default=None),
+    ] = None,
+    fields: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="(Optional) Fields to set during the transition, e.g. {'resolution': {'name': 'Fixed'}}.",
+            default=None,
+        ),
+    ] = None,
+    comment: Annotated[
+        str | None,
+        Field(description="(Optional) Comment added to each transitioned issue.", default=None),
+    ] = None,
+    return_mode: Annotated[
+        Literal["summary", "minimal", "full"],
+        Field(description="'summary' (default), 'minimal', or 'full'. Single-key only.", default="summary"),
+    ] = "summary",
+) -> str:
+    """Move one or many Jira issues to a new status by NAME.
+
+    Replaces transition_issue / batch_transition / get_transitions. The
+    response includes next_transitions (single-key), so no lookup call is
+    ever needed. Batch failures are per-key — one bad key never aborts the rest.
+    """
+    jira = await get_jira_fetcher(ctx)
+    key_list = _parse_csv(keys) or []
+    if not key_list:
+        raise ValueError("keys is required.")
+    if not transition_id and not to_status:
+        raise ValueError("Provide to_status (e.g. 'Ready for QA') or transition_id.")
+
+    update_fields = fields or {}
+    if not isinstance(update_fields, dict):
+        raise ValueError("fields must be a dictionary.")
+
+    if len(key_list) == 1:
+        key = key_list[0]
+        resolved = transition_id or _resolve_transition_id(jira, key, to_status)
+        issue = jira.transition_issue(
+            issue_key=key,
+            transition_id=resolved,
+            fields=update_fields,
+            comment=comment,
+        )
+        return _operation_response(
+            jira,
+            message=f"Issue {key} transitioned successfully",
+            issue=issue,
+            issue_key=key,
+            return_mode=return_mode,
+            extra={"next_transitions": _next_transitions(jira, key)},
+        )
+
+    results: list[dict[str, Any]] = []
+    ok = fail = 0
+    for key in key_list:
+        try:
+            resolved = transition_id or _resolve_transition_id(jira, key, to_status)
+            jira.transition_issue(
+                issue_key=key,
+                transition_id=resolved,
+                fields=update_fields,
+                comment=comment,
+            )
+            results.append({"key": key, "success": True})
+            ok += 1
+        except Exception as e:
+            results.append({"key": key, "success": False, "error": str(e)})
+            fail += 1
+            logger.warning(f"transition: {key} failed: {e}")
+    return _json(
+        {
+            "target": to_status or transition_id,
+            "summary": {"ok": ok, "fail": fail, "total": len(key_list)},
+            "results": results,
+        }
+    )
+
+
+@jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},
 )
