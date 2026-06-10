@@ -118,22 +118,41 @@ def _operation_response(
 ) -> str:
     result: dict[str, Any] = {"message": message}
     key = issue_key
-    if issue is not None:
-        shaped = _shape_issue_model(
-            jira,
-            issue,
-            return_mode=return_mode,
-            response_fields=response_fields,
-        )
-        if shaped:
-            key = shaped.get("key") or key
-            result["issue"] = shaped
+    # Response shaping must NEVER fail a write that already succeeded —
+    # an error response after a completed write makes the agent retry and
+    # duplicate the operation (observed 2026-05-12: assignee writes
+    # succeeded while their responses errored; agent re-ran them).
+    try:
+        if issue is not None:
+            shaped = _shape_issue_model(
+                jira,
+                issue,
+                return_mode=return_mode,
+                response_fields=response_fields,
+            )
+            if shaped:
+                key = shaped.get("key") or key
+                result["issue"] = shaped
+    except Exception as e:
+        logger.warning(f"_operation_response: shaping failed, degrading: {e}")
+        result["response_shaping_error"] = str(e)
+        if issue is not None and key is None:
+            key = getattr(issue, "key", None)
     if key:
         result["key"] = key
         result["url"] = _issue_url(jira, key)
     if extra:
-        result.update(extra)
-    return _json(result)
+        try:
+            result.update(extra)
+        except Exception:
+            pass
+    try:
+        return _json(result)
+    except Exception as e:
+        logger.warning(f"_operation_response: serialization failed: {e}")
+        return json.dumps(
+            {"message": message, "key": key, "serialization_error": str(e)}
+        )
 
 
 def _find_transition(
@@ -149,6 +168,66 @@ def _find_transition(
     for transition in transitions:
         if str(transition.get("name", "")).casefold() == target:
             return transition
+    return None
+
+
+def _resolve_transition_id(
+    jira: Any, issue_key: str, status_name: str
+) -> str:
+    """Map a human-readable status/transition name to its transition id."""
+    transitions = jira.get_available_transitions(issue_key)
+    match = _find_transition(transitions, status_name)
+    if match is None:
+        available = ", ".join(
+            f"'{t.get('to_status') or t.get('name')}' (id {t.get('id')})"
+            for t in transitions
+        )
+        raise ValueError(
+            f"No transition from {issue_key}'s current status matches "
+            f"'{status_name}'. Available transitions: {available or 'none'}. "
+            "Retry with one of those names as status_name, or pass the id "
+            "as transition_id."
+        )
+    return str(match.get("id"))
+
+
+def _next_transitions(jira: Any, issue_key: str) -> list[dict[str, Any]]:
+    """Compact {id, to_status} list of moves valid from the issue's new status."""
+    try:
+        return [
+            {"id": t.get("id"), "to_status": t.get("to_status") or t.get("name")}
+            for t in jira.get_available_transitions(issue_key)
+        ]
+    except Exception:  # response enrichment must never fail the operation
+        return []
+
+
+def _find_recent_duplicate(
+    jira: Any, project_key: str, summary: str
+) -> str | None:
+    """Key of an issue with the same summary created in the project within
+    the last 10 minutes, else None. Fails open: a guard error never blocks
+    creation. Summary comparison is exact (casefolded) client-side — the
+    summary is deliberately kept out of the JQL to avoid fuzzy-match noise
+    and quoting pitfalls."""
+    try:
+        result = jira.search_issues(
+            jql=f'project = "{project_key}" AND created >= "-10m"',
+            fields=["summary"],
+            limit=20,
+        )
+        target = summary.strip().casefold()
+        for issue in result.issues:
+            raw = issue.to_simplified_dict()
+            candidate = str(
+                raw.get("summary")
+                or (raw.get("fields") or {}).get("summary")
+                or ""
+            )
+            if candidate.strip().casefold() == target:
+                return raw.get("key")
+    except Exception as e:
+        logger.warning(f"create_issue duplicate guard skipped: {e}")
     return None
 
 
@@ -280,6 +359,10 @@ async def get_issue(
     ] = None,
 ) -> str:
     """Get details of a specific Jira issue including its Epic links and relationship information.
+
+    For a status/assignee-only check (e.g. polling a ticket in a sweep), use
+    jira_quick_status instead — it returns a few fields for many keys in one
+    call and costs a fraction of the context.
 
     Args:
         ctx: The FastMCP context.
@@ -749,6 +832,11 @@ async def get_transitions(
 ) -> str:
     """Get available status transitions for a Jira issue.
 
+    Usually unnecessary: jira_transition_issue and jira_batch_transition
+    accept status_name (e.g. 'Ready for QA') and resolve the transition id
+    server-side; their responses include next_transitions. Call this only
+    to inspect a workflow without transitioning.
+
     Args:
         ctx: The FastMCP context.
         issue_key: Jira issue key.
@@ -1189,8 +1277,26 @@ async def create_issue(
             default=None,
         ),
     ] = None,
+    force: Annotated[
+        bool,
+        Field(
+            description=(
+                "Bypass the duplicate guard. By default, if an issue with the "
+                "same summary was created in this project within the last 10 "
+                "minutes, the existing key is returned instead of creating a "
+                "duplicate. Pass true only when the duplicate is intentional."
+            ),
+            default=False,
+        ),
+    ] = False,
 ) -> str:
     """Create a new Jira issue.
+
+    Duplicate guard: if an identical-summary issue was created in the same
+    project within the last 10 minutes, this returns the existing issue's
+    key (duplicate_guard=true in the response) instead of creating another.
+    This protects against retries after ambiguous responses. Pass force=true
+    to create anyway.
 
     PARAMETER GUIDE:
     - Top-level: project_key, summary, issue_type, assignee, description, components
@@ -1237,6 +1343,25 @@ async def create_issue(
             raise ValueError(f"additional_fields is not valid JSON: {e}") from e
     else:
         raise ValueError("additional_fields must be a dictionary or JSON string.")
+
+    if not force:
+        duplicate_key = _find_recent_duplicate(jira, project_key, summary)
+        if duplicate_key:
+            return _json(
+                {
+                    "message": (
+                        f"Duplicate guard: {duplicate_key} with the same "
+                        "summary was created in this project within the last "
+                        "10 minutes — NOT creating another. If the earlier "
+                        "call appeared to fail, it actually succeeded; use "
+                        f"{duplicate_key}. Pass force=true to create a "
+                        "duplicate intentionally."
+                    ),
+                    "key": duplicate_key,
+                    "url": _issue_url(jira, duplicate_key),
+                    "duplicate_guard": True,
+                }
+            )
 
     issue = jira.create_issue(
         project_key=project_key,
@@ -1725,11 +1850,30 @@ async def add_comment(
                 "canonical comment syntax. Detected: " + ", ".join(markers)
             )
 
-    # add_comment returns dict
+    # add_comment returns dict: {id, body (cleaned), created, author}
     result = jira.add_comment(issue_key, comment, visibility)
-    envelope: dict[str, Any] = result if isinstance(result, dict) else {"comment": result}
+    if not isinstance(result, dict):
+        envelope: dict[str, Any] = {"comment": result}
+        if warnings:
+            envelope["warnings"] = warnings
+        return json.dumps(envelope, indent=2, ensure_ascii=False)
+
+    body = str(result.get("body") or "")
+    comment_id = result.get("id")
+    envelope = {
+        "success": True,
+        "comment_id": comment_id,
+        "url": (
+            f"{_issue_url(jira, issue_key)}"
+            f"?focusedCommentId={comment_id}" if comment_id else _issue_url(jira, issue_key)
+        ),
+        # Stored-body preview, post Wiki conversion — enough to verify the
+        # comment rendered correctly WITHOUT a follow-up jira_get_issue call.
+        "body_preview": body[:300] + ("…" if len(body) > 300 else ""),
+        "body_chars": len(body),
+        "created": result.get("created"),
+    }
     if warnings:
-        envelope = dict(envelope)
         envelope["warnings"] = warnings
     return json.dumps(envelope, indent=2, ensure_ascii=False)
 
@@ -2102,14 +2246,28 @@ async def transition_issue(
     ctx: Context,
     issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
     transition_id: Annotated[
-        str,
+        str | None,
         Field(
             description=(
-                "ID of the transition to perform. Use the jira_get_transitions tool first "
-                "to get the available transition IDs for the issue. Example values: '11', '21', '31'"
-            )
+                "(Optional) ID of the transition to perform (e.g. '41'). "
+                "Prefer status_name instead — it resolves the id server-side, "
+                "so a prior jira_get_transitions call is NOT needed."
+            ),
+            default=None,
         ),
-    ],
+    ] = None,
+    status_name: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(Optional) Target status by name, e.g. 'Ready for QA' or "
+                "'In Progress'. Case-insensitive; resolved server-side against "
+                "the issue's available transitions. Provide this OR "
+                "transition_id. On no match the error lists every valid name."
+            ),
+            default=None,
+        ),
+    ] = None,
     fields: Annotated[
         dict[str, Any] | None,
         Field(
@@ -2155,10 +2313,17 @@ async def transition_issue(
 ) -> str:
     """Transition a Jira issue to a new status.
 
+    Accepts either a target status name (preferred — resolved server-side,
+    no jira_get_transitions round-trip needed) or a raw transition id.
+    The response includes ``next_transitions`` (the moves valid from the
+    new status), so a follow-up jira_get_transitions call is unnecessary.
+    For many issues through the same status, use jira_batch_transition.
+
     Args:
         ctx: The FastMCP context.
         issue_key: Jira issue key.
-        transition_id: ID of the transition.
+        transition_id: Optional ID of the transition.
+        status_name: Optional target status name (case-insensitive).
         fields: Optional dictionary of fields to update during transition.
         comment: Optional comment for the transition.
         return_mode: Response payload size — 'summary' (default), 'minimal',
@@ -2167,15 +2332,21 @@ async def transition_issue(
             return_mode='summary'.
 
     Returns:
-        JSON string with the shaped operation result (key + url + message,
-        plus the issue payload when return_mode != 'minimal').
+        JSON string with the shaped operation result (key + url + message +
+        next_transitions, plus the issue payload when return_mode != 'minimal').
 
     Raises:
         ValueError: If required fields missing, invalid input, in read-only mode, or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
-    if not issue_key or not transition_id:
-        raise ValueError("issue_key and transition_id are required.")
+    if not issue_key:
+        raise ValueError("issue_key is required.")
+    if not transition_id and not status_name:
+        raise ValueError(
+            "Provide status_name (e.g. 'Ready for QA') or transition_id."
+        )
+    if not transition_id:
+        transition_id = _resolve_transition_id(jira, issue_key, status_name)
 
     # Use fields directly as dict
     update_fields = fields or {}
@@ -2196,6 +2367,7 @@ async def transition_issue(
         issue_key=issue_key,
         return_mode=return_mode,
         response_fields=response_fields,
+        extra={"next_transitions": _next_transitions(jira, issue_key)},
     )
 
 
@@ -2211,9 +2383,26 @@ async def batch_transition(
         Field(description="Comma-separated Jira issue keys."),
     ],
     transition_id: Annotated[
-        str,
-        Field(description="ID of the transition to perform on every key."),
-    ],
+        str | None,
+        Field(
+            description=(
+                "(Optional) ID of the transition to perform on every key. "
+                "Prefer status_name — ids vary per workflow; the name is "
+                "resolved per key server-side."
+            ),
+            default=None,
+        ),
+    ] = None,
+    status_name: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(Optional) Target status by name (e.g. 'Ready for QA'), "
+                "resolved per key. Provide this OR transition_id."
+            ),
+            default=None,
+        ),
+    ] = None,
     comment: Annotated[
         str | None,
         Field(
@@ -2222,36 +2411,43 @@ async def batch_transition(
         ),
     ] = None,
 ) -> str:
-    """Transition many Jira issues through the same transition in one call.
+    """Transition many Jira issues to the same status in one call.
 
-    Returns a per-key result list. Failures on one key do not abort the
-    others — the caller sees the full batch outcome and can retry the
-    individual failures.
+    Accepts a status name (preferred; resolved per key, so mixed workflows
+    work) or a raw transition id applied verbatim to every key. Failures on
+    one key do not abort the others — the caller sees the full batch outcome
+    and can retry the individual failures.
 
     Args:
         ctx: The FastMCP context.
         keys: Comma-separated Jira issue keys.
-        transition_id: ID of the transition to apply to every key.
+        transition_id: Optional transition id to apply to every key.
+        status_name: Optional target status name, resolved per key.
         comment: Optional comment text emitted on each transition.
 
     Returns:
-        JSON object: ``{transition_id, summary: {ok, fail, total}, results: [...]}``.
+        JSON object: ``{target, summary: {ok, fail, total}, results: [...]}``.
     """
     jira = await get_jira_fetcher(ctx)
     key_list = _parse_csv(keys) or []
     if not key_list:
         raise ValueError("keys is required (comma-separated Jira issue keys).")
-    if not transition_id:
-        raise ValueError("transition_id is required.")
+    if not transition_id and not status_name:
+        raise ValueError(
+            "Provide status_name (e.g. 'Ready for QA') or transition_id."
+        )
 
     results: list[dict[str, Any]] = []
     ok = 0
     fail = 0
     for key in key_list:
         try:
+            resolved_id = transition_id or _resolve_transition_id(
+                jira, key, status_name
+            )
             jira.transition_issue(
                 issue_key=key,
-                transition_id=transition_id,
+                transition_id=resolved_id,
                 fields={},
                 comment=comment,
             )
@@ -2264,7 +2460,7 @@ async def batch_transition(
 
     return _json(
         {
-            "transition_id": transition_id,
+            "target": status_name or transition_id,
             "summary": {"ok": ok, "fail": fail, "total": len(key_list)},
             "results": results,
         }
