@@ -131,13 +131,19 @@ def _operation_response(
                 response_fields=response_fields,
             )
             if shaped:
-                key = shaped.get("key") or key
+                # Only adopt the shaped key when it's a usable string —
+                # mocks/garbage from shaping must never displace the
+                # caller-supplied issue_key (B2: the fallback envelope
+                # below must always be serializable).
+                shaped_key = shaped.get("key")
+                key = shaped_key if isinstance(shaped_key, str) and shaped_key else key
                 result["issue"] = shaped
     except Exception as e:
         logger.warning(f"_operation_response: shaping failed, degrading: {e}")
         result["response_shaping_error"] = str(e)
         if issue is not None and key is None:
-            key = getattr(issue, "key", None)
+            issue_attr_key = getattr(issue, "key", None)
+            key = issue_attr_key if isinstance(issue_attr_key, str) else None
     if key:
         result["key"] = key
         result["url"] = _issue_url(jira, key)
@@ -151,7 +157,13 @@ def _operation_response(
     except Exception as e:
         logger.warning(f"_operation_response: serialization failed: {e}")
         return json.dumps(
-            {"message": message, "key": key, "serialization_error": str(e)}
+            {
+                "message": message,
+                "key": key
+                if isinstance(key, str)
+                else (str(key) if key is not None else None),
+                "serialization_error": str(e),
+            }
         )
 
 

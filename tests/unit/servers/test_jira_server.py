@@ -1510,6 +1510,9 @@ async def test_jira_transition_single_by_name(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.get_available_transitions.return_value = [
         {"id": "41", "name": "Ready for QA", "to_status": "Ready for QA"},
     ]
+    # A real to_simplified_dict() payload keeps this on the success path —
+    # with the fixture's default (unspec'd MagicMock) the envelope degrades
+    # to the last-resort fallback, which drops next_transitions.
     mock_issue = MagicMock()
     mock_issue.to_simplified_dict.return_value = {
         "key": "TEST-123",
@@ -1550,6 +1553,38 @@ async def test_jira_transition_invalid_name_lists_options(jira_client, mock_jira
         await jira_client.call_tool(
             "jira_transition", {"keys": "TEST-123", "to_status": "Nonexistent"}
         )
+
+
+def test_operation_response_never_fails_on_unserializable_issue():
+    """B2 guarantee: a completed write always gets a success envelope,
+    even when shaping AND the shaped key are garbage."""
+    from src.mcp_atlassian.servers.jira import _operation_response
+
+    class _Unserializable:
+        def __repr__(self):
+            return "<unserializable>"
+
+    class _WeirdIssue:
+        key = _Unserializable()
+
+        def to_simplified_dict(self):
+            # shaping path: returns a dict whose key value cannot be JSON-dumped
+            return {"key": _Unserializable(), "summary": "x"}
+
+    class _StubJiraCfg:
+        class config:
+            url = "https://test.example.com"
+
+    out = _operation_response(
+        _StubJiraCfg(),
+        message="Issue transitioned successfully",
+        issue=_WeirdIssue(),
+        issue_key="DS-1",
+        return_mode="summary",
+    )
+    parsed = json.loads(out)  # must not raise, must be valid JSON
+    assert parsed["message"] == "Issue transitioned successfully"
+    assert parsed["key"] == "DS-1"  # explicit issue_key wins over garbage
 
 
 @pytest.mark.anyio
