@@ -231,6 +231,177 @@ def _find_recent_duplicate(
     return None
 
 
+TRUNC_HINT = '… [truncated — use response_format="full" for complete text]'
+
+
+def _truncate_tagged(text: str | None, limit: int) -> str | None:
+    """Truncate with an explicit steering hint so the agent knows how to get more."""
+    if not text:
+        return None
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + TRUNC_HINT
+
+
+def _issue_card(
+    jira: Any, issue: Any, *, response_format: str = "summary"
+) -> dict[str, Any]:
+    """Token-budgeted issue view. summary ≈ 1 KB regardless of issue size."""
+    raw = issue.to_simplified_dict()
+    if raw.get("key") and not raw.get("url"):
+        raw["url"] = _issue_url(jira, raw["key"])
+    if response_format == "full":
+        return raw
+
+    card = ResponseFormatter.compress_issue(raw, include_description=False)
+    card["url"] = raw.get("url")
+    if raw.get("description"):
+        card["description"] = _truncate_tagged(raw["description"], 400)
+    comments = raw.get("comments") or []
+    if comments:
+        card["comments_total"] = len(comments)
+        card["latest_comments"] = [
+            {
+                "author": (
+                    (c.get("author") or {}).get("display_name")
+                    if isinstance(c.get("author"), dict)
+                    else c.get("author")
+                ),
+                "created": c.get("created"),
+                "body": _truncate_tagged(str(c.get("body") or ""), 200),
+            }
+            for c in comments[-2:]
+        ]
+    return {k: v for k, v in card.items() if v is not None}
+
+
+_GET_INCLUDES = {"changelog", "dates", "sla"}
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Get Issues", "readOnlyHint": True},
+)
+async def get(
+    ctx: Context,
+    keys: Annotated[
+        str,
+        Field(
+            description=(
+                "One Jira issue key or a comma-separated list (e.g. 'DS-123' or "
+                "'DS-123,DS-124,DS-125'). Pass many keys in ONE call instead of "
+                "calling once per key."
+            )
+        ),
+    ],
+    response_format: Annotated[
+        str,
+        Field(
+            description=(
+                "'summary' (default, ~1 KB/issue: triage fields + truncated "
+                "description + latest 2 comments truncated) or 'full' (complete "
+                "description and all fetched comments). summary answers "
+                "status/assignee/triage questions — request full only when you "
+                "need complete text."
+            ),
+            default="summary",
+        ),
+    ] = "summary",
+    fields: Annotated[
+        str,
+        Field(
+            description=(
+                "(Optional) Comma-separated Jira fields to fetch. '*all' for "
+                "everything. Default: essential fields."
+            ),
+            default=",".join(DEFAULT_READ_JIRA_FIELDS),
+        ),
+    ] = ",".join(DEFAULT_READ_JIRA_FIELDS),
+    comment_limit: Annotated[
+        int,
+        Field(description="Max comments fetched per issue (0 = none)", default=10, ge=0, le=100),
+    ] = 10,
+    include: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(Optional) Extras, comma-separated: 'changelog' (status history), "
+                "'dates' (created/updated/due/resolution + status durations), "
+                "'sla' (cycle/lead time metrics)."
+            ),
+            default=None,
+        ),
+    ] = None,
+) -> str:
+    """Get one or many Jira issues in a token-budgeted form.
+
+    Replaces get_issue / get_issue_summary / quick_status / batch_get_changelogs /
+    get_issue_dates / get_issue_sla. For finding issues by query, use jira_find.
+    Re-fetching with summary format is cheap — don't hoard full payloads.
+
+    Returns:
+        JSON object mapping each requested key to its issue card (or
+        {"error": ...} for keys that failed — one bad key never fails the batch).
+    """
+    jira = await get_jira_fetcher(ctx)
+    key_list = _parse_csv(keys) or []
+    if not key_list:
+        raise ValueError("keys is required (one key or comma-separated keys).")
+    includes = set(_parse_csv(include) or [])
+    invalid = includes - _GET_INCLUDES
+    if invalid:
+        raise ValueError(
+            f"Invalid include value(s): {sorted(invalid)}. "
+            f"Valid: {sorted(_GET_INCLUDES)}."
+        )
+
+    fields_list: str | list[str] | None = fields
+    if fields and fields != "*all":
+        fields_list = [f.strip() for f in fields.split(",")]
+    expand = "changelog" if "changelog" in includes else None
+
+    out: dict[str, Any] = {}
+    for key in key_list:
+        try:
+            issue = jira.get_issue(
+                issue_key=key,
+                fields=fields_list,
+                expand=expand,
+                comment_limit=comment_limit,
+                properties=None,
+                update_history=False,
+            )
+            card = _issue_card(jira, issue, response_format=response_format)
+            if "dates" in includes:
+                try:
+                    card["dates"] = jira.get_issue_dates(
+                        issue_key=key,
+                        include_created=True,
+                        include_updated=True,
+                        include_due_date=True,
+                        include_resolution_date=True,
+                        include_status_changes=True,
+                        include_status_summary=True,
+                    ).to_simplified_dict()
+                except Exception as e:  # extras never fail the read
+                    card["dates"] = {"error": str(e)}
+            if "sla" in includes:
+                try:
+                    card["sla"] = jira.get_issue_sla(
+                        issue_key=key,
+                        metrics=None,
+                        working_hours_only=None,
+                        include_raw_dates=False,
+                    ).to_simplified_dict()
+                except Exception as e:
+                    card["sla"] = {"error": str(e)}
+            out[key] = card
+        except Exception as e:
+            out[key] = {"error": str(e)}
+    return _json(out)
+
+
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},

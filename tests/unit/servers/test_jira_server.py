@@ -283,6 +283,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         create_issue_link,
         delete_issue,
         download_attachments,
+        get,
         get_agile_boards,
         get_all_projects,
         get_board_issues,
@@ -305,6 +306,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     )
 
     jira_sub_mcp = FastMCP(name="TestJiraSubMCP")
+    jira_sub_mcp.add_tool(get)
     jira_sub_mcp.add_tool(get_issue)
     jira_sub_mcp.add_tool(search)
     jira_sub_mcp.add_tool(search_fields)
@@ -1229,3 +1231,85 @@ async def test_batch_create_versions_empty(jira_client, mock_jira_fetcher):
     )
     content = json.loads(response.content[0].text)
     assert content == []
+
+
+# --- v2 surface: jira_get -------------------------------------------------
+
+from src.mcp_atlassian.servers.jira import _issue_card, _truncate_tagged, TRUNC_HINT
+
+
+class _StubIssue:
+    """Minimal stand-in for a JiraIssue model."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def to_simplified_dict(self):
+        return dict(self._data)
+
+
+class _StubJira:
+    class config:
+        url = "https://test.example.com"
+
+
+def test_truncate_tagged_short_text_untouched():
+    assert _truncate_tagged("hello world", 500) == "hello world"
+
+
+def test_truncate_tagged_long_text_gets_steering_hint():
+    text = "word " * 300  # 1500 chars
+    out = _truncate_tagged(text, 500)
+    assert len(out) < 600
+    assert out.endswith(TRUNC_HINT)
+
+
+def test_issue_card_summary_truncates_description_and_comments():
+    issue = _StubIssue(
+        {
+            "key": "DS-1",
+            "summary": "Big ticket",
+            "description": "lorem " * 500,  # 3000 chars
+            "status": {"name": "In Progress"},
+            "priority": {"name": "P2"},
+            "assignee": {"display_name": "Jack"},
+            "updated": "2026-06-09T10:00:00.000+0000",
+            "comments": [
+                {"author": {"display_name": f"U{i}"}, "created": "c", "body": "blah " * 200}
+                for i in range(5)
+            ],
+        }
+    )
+    card = _issue_card(_StubJira(), issue, response_format="summary")
+    assert card["key"] == "DS-1"
+    assert card["description"].endswith(TRUNC_HINT)
+    assert len(card["description"]) < 600
+    assert card["comments_total"] == 5
+    assert len(card["latest_comments"]) == 2
+    assert card["latest_comments"][0]["body"].endswith(TRUNC_HINT)
+    assert card["url"] == "https://test.example.com/browse/DS-1"
+    # the whole card must be small — this is the D3 budget
+    assert len(json.dumps(card)) < 1500
+
+
+def test_issue_card_full_returns_everything():
+    issue = _StubIssue({"key": "DS-1", "summary": "s", "description": "d" * 2000})
+    card = _issue_card(_StubJira(), issue, response_format="full")
+    assert card["description"] == "d" * 2000
+
+
+@pytest.mark.anyio
+async def test_jira_get_single_key(jira_client, mock_jira_fetcher):
+    response = await jira_client.call_tool("jira_get", {"keys": "TEST-123"})
+    content = json.loads(response.content[0].text)
+    assert "TEST-123" in content
+    assert content["TEST-123"]["key"] == "TEST-123"
+    assert content["TEST-123"]["summary"] == "Test Issue Summary"
+
+
+@pytest.mark.anyio
+async def test_jira_get_rejects_bad_include(jira_client):
+    with pytest.raises(Exception, match="include"):
+        await jira_client.call_tool(
+            "jira_get", {"keys": "TEST-123", "include": "bogus"}
+        )
