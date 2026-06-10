@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
@@ -422,14 +422,16 @@ async def get(
     return _json(out)
 
 
-_JQL_MARKERS = re.compile(
-    r"[=~<>]|\bORDER\s+BY\b|\bAND\b|\bOR\b|\bin\s*\(", re.IGNORECASE
-)
+_JQL_MARKERS = re.compile(r"[=~<>]|\bORDER\s+BY\b|\bin\s*\(", re.IGNORECASE)
+# JQL boolean operators are conventionally uppercase; lowercase 'and'/'or' is
+# natural language. Case-sensitive on purpose.
+_JQL_BOOL_OPS = re.compile(r"\b(AND|OR)\b")
 
 
 def _looks_like_jql(query: str) -> bool:
     """Heuristic: JQL contains operators/keywords natural language doesn't."""
-    return bool(_JQL_MARKERS.search(query or ""))
+    q = query or ""
+    return bool(_JQL_MARKERS.search(q) or _JQL_BOOL_OPS.search(q))
 
 
 @jira_mcp.tool(
@@ -450,7 +452,7 @@ async def find(
         ),
     ] = None,
     mode: Annotated[
-        str,
+        Literal["auto", "jql", "semantic"],
         Field(
             description="'auto' (default — detect), 'jql', or 'semantic' to force a path.",
             default="auto",
@@ -477,7 +479,12 @@ async def find(
         int, Field(description="Max results (1-50)", default=10, ge=1, le=50)
     ] = 10,
     start_at: Annotated[
-        int, Field(description="Pagination offset (0-based)", default=0, ge=0)
+        int,
+        Field(
+            description="Pagination offset (0-based), ignored for similar_to",
+            default=0,
+            ge=0,
+        ),
     ] = 0,
     projects_filter: Annotated[
         str | None,
@@ -492,6 +499,10 @@ async def find(
     jira_get calls are usually unnecessary. Narrow the query rather than
     paginating deeply.
     """
+    # Deliberately function-level: vector_tools imports jira_mcp from this
+    # module, so a top-level import would be circular.
+    from mcp_atlassian.servers.vector_tools import semantic_search_impl
+
     jira = await get_jira_fetcher(ctx)
     projects = _parse_csv(projects_filter)
 
@@ -504,8 +515,6 @@ async def find(
         )
         raw = issue.to_simplified_dict()
         text = f"{raw.get('summary') or ''}\n{(raw.get('description') or '')[:1000]}"
-        from mcp_atlassian.servers.vector_tools import semantic_search_impl
-
         result = await semantic_search_impl(
             text, projects=projects, limit=limit, exclude_key=similar_to
         )
@@ -538,8 +547,6 @@ async def find(
                 "rather than paginating."
             )
         return _json(result)
-
-    from mcp_atlassian.servers.vector_tools import semantic_search_impl
 
     result = await semantic_search_impl(
         query, projects=projects, limit=limit, offset=start_at

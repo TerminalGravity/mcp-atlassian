@@ -1429,6 +1429,9 @@ from src.mcp_atlassian.servers.jira import _looks_like_jql
         ("text ~ 'payment'", True),
         ("authentication failures in the checkout flow", False),
         ("slow database queries", False),
+        ("payment and refund failures", False),
+        ("login or signup errors", False),
+        ("labels = frontend AND project = DS", True),
     ],
 )
 def test_looks_like_jql(query, expected):
@@ -1461,6 +1464,34 @@ async def test_jira_find_semantic_path(jira_client, mock_jira_fetcher):
     content = json.loads(response.content[0].text)
     assert content["mode"] == "semantic"
     assert content["total_matches"] == 1
+
+
+@pytest.mark.anyio
+async def test_jira_find_similar_to_path(jira_client, mock_jira_fetcher):
+    fake = {"total_matches": 2, "returned": 2, "results": []}
+    # NOTE: no `src.` prefix — see test_jira_find_semantic_path.
+    mock_impl = AsyncMock(return_value=fake)
+    with patch(
+        "mcp_atlassian.servers.vector_tools.semantic_search_impl", mock_impl
+    ):
+        response = await jira_client.call_tool(
+            "jira_find", {"similar_to": "TEST-123"}
+        )
+    content = json.loads(response.content[0].text)
+    assert content["mode"] == "similar"
+    assert content["similar_to"] == "TEST-123"
+    assert content["total_matches"] == 2
+    mock_impl.assert_awaited_once()
+    assert mock_impl.call_args.kwargs["exclude_key"] == "TEST-123"
+    assert mock_jira_fetcher.get_issue.call_args.kwargs["comment_limit"] == 0
+
+
+@pytest.mark.anyio
+async def test_jira_find_rejects_bogus_mode(jira_client):
+    with pytest.raises(Exception, match="mode"):
+        await jira_client.call_tool(
+            "jira_find", {"query": "project = TEST", "mode": "bogus"}
+        )
 
 
 @pytest.mark.anyio

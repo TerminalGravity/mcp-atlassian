@@ -370,6 +370,9 @@ from src.mcp_atlassian.servers.jira import _looks_like_jql
         ("text ~ 'payment'", True),
         ("authentication failures in the checkout flow", False),
         ("slow database queries", False),
+        ("payment and refund failures", False),
+        ("login or signup errors", False),
+        ("labels = frontend AND project = DS", True),
     ],
 )
 def test_looks_like_jql(query, expected):
@@ -489,14 +492,16 @@ async def semantic_search_impl(
 After the `get` tool in `src/mcp_atlassian/servers/jira.py`:
 
 ```python
-_JQL_MARKERS = re.compile(
-    r"[=~<>]|\bORDER\s+BY\b|\bAND\b|\bOR\b|\bin\s*\(", re.IGNORECASE
-)
+_JQL_MARKERS = re.compile(r"[=~<>]|\bORDER\s+BY\b|\bin\s*\(", re.IGNORECASE)
+# JQL boolean operators are conventionally uppercase; lowercase 'and'/'or' is
+# natural language. Case-sensitive on purpose.
+_JQL_BOOL_OPS = re.compile(r"\b(AND|OR)\b")
 
 
 def _looks_like_jql(query: str) -> bool:
     """Heuristic: JQL contains operators/keywords natural language doesn't."""
-    return bool(_JQL_MARKERS.search(query or ""))
+    q = query or ""
+    return bool(_JQL_MARKERS.search(q) or _JQL_BOOL_OPS.search(q))
 
 
 @jira_mcp.tool(
