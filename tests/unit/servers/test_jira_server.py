@@ -1275,7 +1275,11 @@ def test_issue_card_summary_truncates_description_and_comments():
             "assignee": {"display_name": "Jack"},
             "updated": "2026-06-09T10:00:00.000+0000",
             "comments": [
-                {"author": {"display_name": f"U{i}"}, "created": "c", "body": "blah " * 200}
+                {
+                    "author": {"display_name": f"U{i}"},
+                    "created": "2026-06-09T10:00:00.000+0000",
+                    "body": "blah " * 200,
+                }
                 for i in range(5)
             ],
         }
@@ -1287,6 +1291,9 @@ def test_issue_card_summary_truncates_description_and_comments():
     assert card["comments_total"] == 5
     assert len(card["latest_comments"]) == 2
     assert card["latest_comments"][0]["body"].endswith(TRUNC_HINT)
+    # comment timestamps must be relative, consistent with the card's 'updated'
+    created = card["latest_comments"][0]["created"]
+    assert created == "just now" or created.endswith("ago")
     assert card["url"] == "https://test.example.com/browse/DS-1"
     # the whole card must be small — this is the D3 budget
     assert len(json.dumps(card)) < 1500

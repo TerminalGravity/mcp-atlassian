@@ -280,7 +280,7 @@ def _issue_card(
                     if isinstance(c.get("author"), dict)
                     else c.get("author")
                 ),
-                "created": c.get("created"),
+                "created": ResponseFormatter._relative_timestamp(c.get("created")),
                 "body": _truncate_tagged(str(c.get("body") or ""), 200),
             }
             for c in comments[-2:]
