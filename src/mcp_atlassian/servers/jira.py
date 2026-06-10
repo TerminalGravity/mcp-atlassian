@@ -422,6 +422,133 @@ async def get(
     return _json(out)
 
 
+_JQL_MARKERS = re.compile(
+    r"[=~<>]|\bORDER\s+BY\b|\bAND\b|\bOR\b|\bin\s*\(", re.IGNORECASE
+)
+
+
+def _looks_like_jql(query: str) -> bool:
+    """Heuristic: JQL contains operators/keywords natural language doesn't."""
+    return bool(_JQL_MARKERS.search(query or ""))
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Find Issues", "readOnlyHint": True},
+)
+async def find(
+    ctx: Context,
+    query: Annotated[
+        str | None,
+        Field(
+            description=(
+                "JQL ('project = DS AND status = \"In Progress\"') or natural "
+                "language ('auth failures in checkout'). JQL is auto-detected; "
+                "natural language uses semantic search over the synced index."
+            ),
+            default=None,
+        ),
+    ] = None,
+    mode: Annotated[
+        str,
+        Field(
+            description="'auto' (default — detect), 'jql', or 'semantic' to force a path.",
+            default="auto",
+        ),
+    ] = "auto",
+    similar_to: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(Optional) An issue key (e.g. 'DS-1234'); finds semantically "
+                "similar issues (duplicate detection). Used instead of query."
+            ),
+            default=None,
+        ),
+    ] = None,
+    fields: Annotated[
+        str,
+        Field(
+            description="(Optional, JQL mode) Comma-separated fields per result. Default: triage set.",
+            default=",".join(DEFAULT_READ_JIRA_FIELDS),
+        ),
+    ] = ",".join(DEFAULT_READ_JIRA_FIELDS),
+    limit: Annotated[
+        int, Field(description="Max results (1-50)", default=10, ge=1, le=50)
+    ] = 10,
+    start_at: Annotated[
+        int, Field(description="Pagination offset (0-based)", default=0, ge=0)
+    ] = 0,
+    projects_filter: Annotated[
+        str | None,
+        Field(description="(Optional) Comma-separated project keys to restrict results.", default=None),
+    ] = None,
+) -> str:
+    """Find Jira issues — the ONLY search tool. JQL, semantic, or similar-to.
+
+    Replaces search / list_issues / get_project_issues / semantic_search /
+    find_similar / detect_duplicates. Results include the triage fields
+    (status, assignee, priority, type, updated) so per-key follow-up
+    jira_get calls are usually unnecessary. Narrow the query rather than
+    paginating deeply.
+    """
+    jira = await get_jira_fetcher(ctx)
+    projects = _parse_csv(projects_filter)
+
+    if similar_to:
+        issue = jira.get_issue(
+            issue_key=similar_to,
+            fields=["summary", "description"],
+            comment_limit=0,
+            update_history=False,
+        )
+        raw = issue.to_simplified_dict()
+        text = f"{raw.get('summary') or ''}\n{(raw.get('description') or '')[:1000]}"
+        from mcp_atlassian.servers.vector_tools import semantic_search_impl
+
+        result = await semantic_search_impl(
+            text, projects=projects, limit=limit, exclude_key=similar_to
+        )
+        result["mode"] = "similar"
+        result["similar_to"] = similar_to
+        return _json(result)
+
+    if not query:
+        raise ValueError("Provide query (JQL or natural language) or similar_to.")
+
+    use_jql = mode == "jql" or (mode == "auto" and _looks_like_jql(query))
+    if use_jql:
+        fields_list: str | list[str] | None = fields
+        if fields and fields != "*all":
+            fields_list = [f.strip() for f in fields.split(",")]
+        search_result = jira.search_issues(
+            jql=query,
+            fields=fields_list,
+            limit=limit,
+            start=start_at,
+            projects_filter=projects_filter,
+        )
+        result = ResponseFormatter.compress_search_result(
+            search_result.to_simplified_dict()
+        )
+        result["mode"] = "jql"
+        if result.get("total", 0) > start_at + limit:
+            result["hint"] = (
+                "More results exist — narrow the JQL (project, status, updated) "
+                "rather than paginating."
+            )
+        return _json(result)
+
+    from mcp_atlassian.servers.vector_tools import semantic_search_impl
+
+    result = await semantic_search_impl(
+        query, projects=projects, limit=limit, offset=start_at
+    )
+    result["mode"] = "semantic"
+    result["query"] = query
+    return _json(result)
+
+
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},

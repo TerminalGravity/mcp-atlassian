@@ -283,6 +283,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         create_issue_link,
         delete_issue,
         download_attachments,
+        find,
         get,
         get_agile_boards,
         get_all_projects,
@@ -306,6 +307,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     )
 
     jira_sub_mcp = FastMCP(name="TestJiraSubMCP")
+    jira_sub_mcp.add_tool(find)
     jira_sub_mcp.add_tool(get)
     jira_sub_mcp.add_tool(get_issue)
     jira_sub_mcp.add_tool(search)
@@ -1411,3 +1413,57 @@ async def test_jira_get_per_key_isolation(jira_client, mock_jira_fetcher):
     assert content["TEST-123"]["summary"] == "Test Issue Summary"
     assert "error" in content["TEST-BAD"]
     assert "does not exist" in content["TEST-BAD"]["error"]
+
+
+# --- v2 surface: jira_find ------------------------------------------------
+
+from src.mcp_atlassian.servers.jira import _looks_like_jql
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("project = DS AND status = 'In Progress'", True),
+        ("assignee = currentUser() ORDER BY updated DESC", True),
+        ("key in (DS-1, DS-2)", True),
+        ("text ~ 'payment'", True),
+        ("authentication failures in the checkout flow", False),
+        ("slow database queries", False),
+    ],
+)
+def test_looks_like_jql(query, expected):
+    assert _looks_like_jql(query) is expected
+
+
+@pytest.mark.anyio
+async def test_jira_find_jql_path(jira_client, mock_jira_fetcher):
+    response = await jira_client.call_tool(
+        "jira_find", {"query": "project = TEST ORDER BY updated DESC"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["mode"] == "jql"
+    assert "issues" in content
+    mock_jira_fetcher.search_issues.assert_called()
+
+
+@pytest.mark.anyio
+async def test_jira_find_semantic_path(jira_client, mock_jira_fetcher):
+    fake = {"query": "auth bugs", "total_matches": 1, "returned": 1, "results": []}
+    # NOTE: no `src.` prefix — find() lazy-imports `mcp_atlassian.servers.vector_tools`,
+    # which is a different module object than the src-prefixed test import.
+    with patch(
+        "mcp_atlassian.servers.vector_tools.semantic_search_impl",
+        AsyncMock(return_value=fake),
+    ):
+        response = await jira_client.call_tool(
+            "jira_find", {"query": "auth bugs in checkout"}
+        )
+    content = json.loads(response.content[0].text)
+    assert content["mode"] == "semantic"
+    assert content["total_matches"] == 1
+
+
+@pytest.mark.anyio
+async def test_jira_find_requires_query_or_similar_to(jira_client):
+    with pytest.raises(Exception, match="query"):
+        await jira_client.call_tool("jira_find", {})

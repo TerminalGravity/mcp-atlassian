@@ -80,6 +80,70 @@ def _get_parser() -> SelfQueryParser:
     return _self_query_parser
 
 
+async def semantic_search_impl(
+    query: str,
+    *,
+    projects: list[str] | None = None,
+    limit: int = 10,
+    offset: int = 0,
+    min_score: float = 0.3,
+    exclude_key: str | None = None,
+) -> dict[str, Any]:
+    """Hybrid vector+FTS search. Plain coroutine shared by jira_find and tools here."""
+    store = _get_store()
+    embedder = _get_embedder()
+    config = _get_config()
+
+    stats = store.get_stats()
+    if stats["total_issues"] == 0:
+        return {
+            "error": "Vector index is empty. Run sync first.",
+            "hint": "uv run python -m mcp_atlassian.vector.cli sync --full",
+        }
+
+    query_vector = await embedder.embed(query)
+    filters: dict[str, Any] = {}
+    if projects:
+        filters["project_key"] = {"$in": projects}
+
+    results, total_count = store.hybrid_search(
+        query_vector=query_vector,
+        query_text=query,
+        limit=limit + (1 if exclude_key else 0),
+        offset=offset,
+        filters=filters or None,
+        fts_weight=config.fts_weight,
+        min_score=min_score,
+    )
+    if exclude_key:
+        results = [r for r in results if r["issue_id"] != exclude_key][:limit]
+
+    response: dict[str, Any] = {
+        "total_matches": total_count,
+        "returned": len(results),
+        "results": [
+            {
+                "key": r["issue_id"],
+                "summary": r["summary"][:120],
+                "type": r["issue_type"],
+                "status": r["status"],
+                "project": r["project_key"],
+                "score": round(r.get("score", 0), 3),
+            }
+            for r in results
+        ],
+        "hint": "Use jira_get with the keys for details",
+    }
+    if total_count > offset + len(results):
+        response["pagination"] = {
+            "offset": offset,
+            "limit": limit,
+            "next_offset": offset + limit,
+            "has_more": True,
+        }
+    return response
+
+
 @jira_mcp.tool(
     tags={"jira", "vector", "read"},
     annotations={"title": "Semantic Search", "readOnlyHint": True},
