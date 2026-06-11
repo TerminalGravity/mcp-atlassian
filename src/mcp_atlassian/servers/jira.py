@@ -779,6 +779,128 @@ async def comment(
     return _json(envelope)
 
 
+def _link_type_dicts(jira: Any) -> list[dict[str, Any]]:
+    """Issue link types as plain dicts regardless of model/dict return."""
+    out = []
+    for t in jira.get_issue_link_types():
+        if hasattr(t, "to_simplified_dict"):
+            out.append(t.to_simplified_dict())
+        elif isinstance(t, dict):
+            out.append(t)
+    return out
+
+
+@jira_mcp.tool(
+    tags={"jira", "write"},
+    annotations={"title": "Link Issue", "destructiveHint": True},
+)
+@check_write_access
+async def link(
+    ctx: Context,
+    issue_key: Annotated[
+        str, Field(description="The issue being linked FROM (e.g. 'DS-123').")
+    ],
+    to: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Link target: an issue key ('DS-456'), an epic key when "
+                "link_type='epic', or a URL when link_type='web'."
+            ),
+            default=None,
+        ),
+    ] = None,
+    link_type: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Semantic link kind: 'epic' (parent epic), 'web' (external URL, "
+                "e.g. a PR), or an issue-link type name like 'Blocks' / "
+                "'Relates' / 'Duplicate'. Unknown names error with the valid list."
+            ),
+            default=None,
+        ),
+    ] = None,
+    title: Annotated[
+        str | None,
+        Field(description="(Optional, web links) Display title; defaults to the URL.", default=None),
+    ] = None,
+    remove: Annotated[
+        bool,
+        Field(description="Remove a link instead of creating one (requires link_id).", default=False),
+    ] = False,
+    link_id: Annotated[
+        str | None,
+        Field(description="(remove=true) The issue-link id to delete.", default=None),
+    ] = None,
+) -> str:
+    """Create or remove any kind of Jira link.
+
+    Replaces link_to_epic / create_issue_link / create_remote_issue_link /
+    remove_issue_link / get_link_types. 'epic' and 'web' are special kinds;
+    everything else is matched (case-insensitive) against the instance's
+    issue-link type names.
+    """
+    jira = await get_jira_fetcher(ctx)
+
+    if remove:
+        if not link_id:
+            raise ValueError("remove=true requires link_id.")
+        result = jira.remove_issue_link(link_id)
+        return _json(result if isinstance(result, dict) else {"success": True})
+
+    if not to or not link_type:
+        raise ValueError("to and link_type are required when creating a link.")
+
+    kind = link_type.strip().casefold()
+    if kind == "epic":
+        issue = jira.link_issue_to_epic(issue_key, to)
+        return _operation_response(
+            jira,
+            message=f"Issue {issue_key} linked to epic {to}.",
+            issue=issue,
+            issue_key=issue_key,
+            return_mode="minimal",
+        )
+
+    if kind == "web":
+        result = jira.create_remote_issue_link(
+            issue_key, {"object": {"url": to, "title": title or to}}
+        )
+        out = result if isinstance(result, dict) else {}
+        out.setdefault("success", True)
+        out["key"] = issue_key
+        return _json(out)
+
+    types = _link_type_dicts(jira)
+    canonical = None
+    for t in types:
+        for candidate in (t.get("name"), t.get("inward"), t.get("outward")):
+            if candidate and str(candidate).casefold() == kind:
+                canonical = t.get("name")
+                break
+        if canonical:
+            break
+    if canonical is None:
+        names = ", ".join(sorted({str(t.get("name")) for t in types if t.get("name")}))
+        raise ValueError(
+            f"Unknown link_type '{link_type}'. Valid issue-link types: {names}. "
+            "Or use 'epic' / 'web'."
+        )
+
+    result = jira.create_issue_link(
+        {
+            "type": {"name": canonical},
+            "inwardIssue": {"key": issue_key},
+            "outwardIssue": {"key": to},
+        }
+    )
+    out = result if isinstance(result, dict) else {}
+    out.setdefault("success", True)
+    out["key"] = issue_key
+    return _json(out)
+
+
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},

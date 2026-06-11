@@ -298,6 +298,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         get_transitions,
         get_user_profile,
         get_worklog,
+        link,
         link_to_epic,
         remove_issue_link,
         search,
@@ -334,6 +335,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     jira_sub_mcp.add_tool(add_comment)
     jira_sub_mcp.add_tool(add_worklog)
     jira_sub_mcp.add_tool(comment)
+    jira_sub_mcp.add_tool(link)
     jira_sub_mcp.add_tool(link_to_epic)
     jira_sub_mcp.add_tool(create_issue_link)
     jira_sub_mcp.add_tool(remove_issue_link)
@@ -1701,3 +1703,61 @@ async def test_jira_comment_rejects_bogus_format(jira_client, mock_jira_fetcher)
             "jira_comment",
             {"issue_key": "TEST-123", "body": "some text", "format": "bogus"},
         )
+
+
+# --- v2 surface: jira_link --------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_link_epic(jira_client, mock_jira_fetcher):
+    response = await jira_client.call_tool(
+        "jira_link",
+        {"issue_key": "TEST-123", "to": "TEST-100", "link_type": "epic"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-123"
+    mock_jira_fetcher.link_issue_to_epic.assert_called_once_with("TEST-123", "TEST-100")
+
+
+@pytest.mark.anyio
+async def test_jira_link_web(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.create_remote_issue_link.return_value = {"success": True}
+    response = await jira_client.call_tool(
+        "jira_link",
+        {
+            "issue_key": "TEST-123",
+            "to": "https://github.com/org/repo/pull/1",
+            "link_type": "web",
+            "title": "PR #1",
+        },
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    mock_jira_fetcher.create_remote_issue_link.assert_called_once_with(
+        "TEST-123",
+        {"object": {"url": "https://github.com/org/repo/pull/1", "title": "PR #1"}},
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_link_issue_link_unknown_type_lists_valid(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_issue_link_types.return_value = [
+        {"id": "1", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+        {"id": "2", "name": "Relates", "inward": "relates to", "outward": "relates to"},
+    ]
+    with pytest.raises(Exception, match="Blocks"):
+        await jira_client.call_tool(
+            "jira_link",
+            {"issue_key": "TEST-123", "to": "TEST-124", "link_type": "Bogus"},
+        )
+
+
+@pytest.mark.anyio
+async def test_jira_link_remove(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.remove_issue_link.return_value = {"success": True}
+    response = await jira_client.call_tool(
+        "jira_link", {"issue_key": "TEST-123", "remove": True, "link_id": "10500"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    mock_jira_fetcher.remove_issue_link.assert_called_once_with("10500")
