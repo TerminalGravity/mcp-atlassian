@@ -687,8 +687,9 @@ async def comment(
         Field(
             description=(
                 "Comment body. Atlassian Wiki is the canonical syntax "
-                "(*bold*, {code}...{code}, h2. heading). With format='auto' "
-                "(default) Markdown markers trigger a warning on the envelope."
+                "(*bold*, {code}...{code}, h2. heading). Input is always run "
+                "through the Markdown→Wiki preprocessor; format only gates the "
+                "Markdown-leakage warning."
             )
         ),
     ],
@@ -709,16 +710,23 @@ async def comment(
     format: Annotated[
         Literal["auto", "wiki", "markdown"],
         Field(
-            description="'auto' (default — warn on Markdown markers), 'wiki' (suppress check), 'markdown' (opt into Markdown→Wiki preprocessor).",
+            description=(
+                "Controls the Markdown-leakage warning only (input is always "
+                "run through the Markdown→Wiki preprocessor): 'auto' (default) "
+                "warns if Markdown markers are detected; 'wiki' and 'markdown' "
+                "both suppress the warning."
+            ),
             default="auto",
         ),
     ] = "auto",
 ) -> str:
     """Add or edit a comment on a Jira issue.
 
-    Replaces add_comment / edit_comment. The response's body_preview is the
-    STORED body post-conversion — verify rendering from it; do NOT follow up
-    with a jira_get call to check the comment.
+    Replaces add_comment / edit_comment. The body is always run through the
+    Markdown→Wiki preprocessor regardless of format; format only gates the
+    Markdown-leakage warning. The response's body_preview is the STORED body
+    post-conversion — verify rendering from it; do NOT follow up with a
+    jira_get call to check the comment.
     """
     jira = await get_jira_fetcher(ctx)
     warnings: list[str] = []
@@ -762,8 +770,10 @@ async def comment(
         ),
         "body_preview": stored[:300] + ("…" if len(stored) > 300 else ""),
         "body_chars": len(stored),
-        "created": result.get("created"),
     }
+    ts = result.get("created") or result.get("updated")
+    if ts:
+        envelope["created" if action == "added" else "updated"] = ts
     if warnings:
         envelope["warnings"] = warnings
     return _json(envelope)

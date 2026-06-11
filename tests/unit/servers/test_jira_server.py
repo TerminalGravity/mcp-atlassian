@@ -1654,7 +1654,7 @@ async def test_jira_comment_edit_path(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.edit_comment.return_value = {
         "id": "10001",
         "body": "edited body",
-        "created": "2026-06-10T10:00:00.000+0000",
+        "updated": "2026-06-10T10:00:00.000+0000",
     }
     response = await jira_client.call_tool(
         "jira_comment",
@@ -1663,9 +1663,25 @@ async def test_jira_comment_edit_path(jira_client, mock_jira_fetcher):
     content = json.loads(response.content[0].text)
     assert content["action"] == "edited"
     assert content["body_preview"] == "edited body"
+    assert content["updated"] == "2026-06-10T10:00:00.000+0000"
+    assert "created" not in content
     mock_jira_fetcher.edit_comment.assert_called_once_with(
         "TEST-123", "10001", "edited body", None
     )
+
+
+@pytest.mark.anyio
+async def test_jira_comment_preview_is_stored_not_input(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.add_comment.return_value = {
+        "id": "1",
+        "body": "*bold*",  # converted Wiki, not the input
+        "created": "c",
+    }
+    response = await jira_client.call_tool(
+        "jira_comment", {"issue_key": "TEST-123", "body": "**bold**"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["body_preview"] == "*bold*"  # stored post-conversion, not input
 
 
 @pytest.mark.anyio
