@@ -675,6 +675,101 @@ async def transition(
 
 
 @jira_mcp.tool(
+    tags={"jira", "write"},
+    annotations={"title": "Comment on Issue", "destructiveHint": True},
+)
+@check_write_access
+async def comment(
+    ctx: Context,
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    body: Annotated[
+        str,
+        Field(
+            description=(
+                "Comment body. Atlassian Wiki is the canonical syntax "
+                "(*bold*, {code}...{code}, h2. heading). With format='auto' "
+                "(default) Markdown markers trigger a warning on the envelope."
+            )
+        ),
+    ],
+    comment_id: Annotated[
+        str | None,
+        Field(
+            description="(Optional) Existing comment id — edits that comment instead of adding a new one.",
+            default=None,
+        ),
+    ] = None,
+    visibility: Annotated[
+        dict[str, str] | None,
+        Field(
+            description="""(Optional) Visibility, e.g. {"type":"group","value":"jira-users"}""",
+            default=None,
+        ),
+    ] = None,
+    format: Annotated[
+        Literal["auto", "wiki", "markdown"],
+        Field(
+            description="'auto' (default — warn on Markdown markers), 'wiki' (suppress check), 'markdown' (opt into Markdown→Wiki preprocessor).",
+            default="auto",
+        ),
+    ] = "auto",
+) -> str:
+    """Add or edit a comment on a Jira issue.
+
+    Replaces add_comment / edit_comment. The response's body_preview is the
+    STORED body post-conversion — verify rendering from it; do NOT follow up
+    with a jira_get call to check the comment.
+    """
+    jira = await get_jira_fetcher(ctx)
+    warnings: list[str] = []
+    if format == "auto":
+        markers: list[str] = []
+        if re.search(r"\*\*[^*\n]+\*\*", body or ""):
+            markers.append("**bold** (Wiki uses *bold*)")
+        if re.search(r"^```", body or "", re.M):
+            markers.append("``` fenced code (Wiki uses {code}...{code})")
+        if re.search(r"^#{1,6} ", body or "", re.M):
+            markers.append("# heading (Wiki uses h1./h2./h3.)")
+        if markers:
+            warnings.append(
+                "Markdown markers detected in comment; Atlassian Wiki is the "
+                "canonical comment syntax. Detected: " + ", ".join(markers)
+            )
+
+    if comment_id:
+        result = jira.edit_comment(issue_key, comment_id, body, visibility)
+        action = "edited"
+    else:
+        result = jira.add_comment(issue_key, body, visibility)
+        action = "added"
+
+    if not isinstance(result, dict):
+        envelope: dict[str, Any] = {"action": action, "comment": result}
+        if warnings:
+            envelope["warnings"] = warnings
+        return _json(envelope)
+
+    stored = str(result.get("body") or "")
+    cid = result.get("id") or comment_id
+    envelope = {
+        "success": True,
+        "action": action,
+        "comment_id": cid,
+        "url": (
+            f"{_issue_url(jira, issue_key)}?focusedCommentId={cid}"
+            if cid
+            else _issue_url(jira, issue_key)
+        ),
+        "body_preview": stored[:300] + ("…" if len(stored) > 300 else ""),
+        "body_chars": len(stored),
+        "created": result.get("created"),
+    }
+    if warnings:
+        envelope["warnings"] = warnings
+    return _json(envelope)
+
+
+@jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},
 )

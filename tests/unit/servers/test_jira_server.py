@@ -279,6 +279,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         batch_create_issues,
         batch_create_versions,
         batch_get_changelogs,
+        comment,
         create_issue,
         create_issue_link,
         delete_issue,
@@ -332,6 +333,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     jira_sub_mcp.add_tool(delete_issue)
     jira_sub_mcp.add_tool(add_comment)
     jira_sub_mcp.add_tool(add_worklog)
+    jira_sub_mcp.add_tool(comment)
     jira_sub_mcp.add_tool(link_to_epic)
     jira_sub_mcp.add_tool(create_issue_link)
     jira_sub_mcp.add_tool(remove_issue_link)
@@ -1623,4 +1625,63 @@ async def test_jira_transition_rejects_bogus_return_mode(jira_client, mock_jira_
         await jira_client.call_tool(
             "jira_transition",
             {"keys": "TEST-123", "to_status": "Done", "return_mode": "bogus"},
+        )
+
+
+# --- v2 surface: jira_comment ----------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_comment_add_returns_preview(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.add_comment.return_value = {
+        "id": "10001",
+        "body": "stored body text",
+        "created": "2026-06-10T10:00:00.000+0000",
+        "author": "Jack",
+    }
+    response = await jira_client.call_tool(
+        "jira_comment", {"issue_key": "TEST-123", "body": "stored body text"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["action"] == "added"
+    assert content["body_preview"] == "stored body text"
+    mock_jira_fetcher.add_comment.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_jira_comment_edit_path(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.edit_comment.return_value = {
+        "id": "10001",
+        "body": "edited body",
+        "created": "2026-06-10T10:00:00.000+0000",
+    }
+    response = await jira_client.call_tool(
+        "jira_comment",
+        {"issue_key": "TEST-123", "body": "edited body", "comment_id": "10001"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["action"] == "edited"
+    assert content["body_preview"] == "edited body"
+    mock_jira_fetcher.edit_comment.assert_called_once_with(
+        "TEST-123", "10001", "edited body", None
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_comment_warns_on_markdown(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.add_comment.return_value = {"id": "1", "body": "x", "created": "c"}
+    response = await jira_client.call_tool(
+        "jira_comment", {"issue_key": "TEST-123", "body": "**bold** text"}
+    )
+    content = json.loads(response.content[0].text)
+    assert any("Markdown" in w for w in content.get("warnings", []))
+
+
+@pytest.mark.anyio
+async def test_jira_comment_rejects_bogus_format(jira_client, mock_jira_fetcher):
+    with pytest.raises(Exception, match="format"):
+        await jira_client.call_tool(
+            "jira_comment",
+            {"issue_key": "TEST-123", "body": "some text", "format": "bogus"},
         )
