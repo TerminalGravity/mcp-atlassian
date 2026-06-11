@@ -15,6 +15,27 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
+def _resolve_read_only(ctx: Context) -> bool:
+    lifespan_ctx_dict = ctx.request_context.lifespan_context
+    app_lifespan_ctx = (
+        lifespan_ctx_dict.get("app_lifespan_context")
+        if isinstance(lifespan_ctx_dict, dict)
+        else None
+    )
+    return bool(app_lifespan_ctx is not None and app_lifespan_ctx.read_only)
+
+
+def require_write_access(ctx: Context, action_description: str) -> None:
+    """Raise ValueError if the server is in read-only mode. For tools that mix
+    read and write sub-actions and so cannot use the @check_write_access
+    decorator on the whole function."""
+    if _resolve_read_only(ctx):
+        logger.warning(
+            f"Attempted write action '{action_description}' in read-only mode."
+        )
+        raise ValueError(f"Cannot {action_description} in read-only mode.")
+
+
 def check_write_access(func: F) -> F:
     """
     Decorator for FastMCP tools to check if the application is in read-only mode.
@@ -24,14 +45,7 @@ def check_write_access(func: F) -> F:
 
     @wraps(func)
     async def wrapper(ctx: Context, *args: Any, **kwargs: Any) -> Any:
-        lifespan_ctx_dict = ctx.request_context.lifespan_context
-        app_lifespan_ctx = (
-            lifespan_ctx_dict.get("app_lifespan_context")
-            if isinstance(lifespan_ctx_dict, dict)
-            else None
-        )  # type: ignore
-
-        if app_lifespan_ctx is not None and app_lifespan_ctx.read_only:
+        if _resolve_read_only(ctx):
             tool_name = func.__name__
             action_description = tool_name.replace(
                 "_", " "

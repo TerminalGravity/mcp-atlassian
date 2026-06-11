@@ -14,7 +14,7 @@ from mcp_atlassian.jira.constants import DEFAULT_READ_JIRA_FIELDS
 from mcp_atlassian.jira.response_formatter import ResponseFormatter
 from mcp_atlassian.models.jira.common import JiraUser
 from mcp_atlassian.servers.dependencies import get_jira_fetcher
-from mcp_atlassian.utils.decorators import check_write_access
+from mcp_atlassian.utils.decorators import check_write_access, require_write_access
 
 logger = logging.getLogger(__name__)
 
@@ -983,9 +983,6 @@ async def worklog(
     return _json({"message": "Worklog added successfully", "key": issue_key, "worklog": result})
 
 
-_AGILE_ACTIONS = {"boards", "sprints", "sprint_issues", "create_sprint", "update_sprint"}
-
-
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Agile (Boards & Sprints)"},
@@ -1021,8 +1018,6 @@ async def agile(
     get_board_issues (use jira_find with JQL for board-issue queries).
     """
     jira = await get_jira_fetcher(ctx)
-    if action not in _AGILE_ACTIONS:
-        raise ValueError(f"Unknown action '{action}'. Valid: {sorted(_AGILE_ACTIONS)}.")
 
     if action == "boards":
         boards = jira.get_all_agile_boards_model(
@@ -1061,6 +1056,7 @@ async def agile(
         )
 
     if action == "create_sprint":
+        require_write_access(ctx, "create sprint")
         if not (board_id and sprint_name and start_date and end_date):
             raise ValueError(
                 "action='create_sprint' requires board_id, sprint_name, "
@@ -1073,9 +1069,10 @@ async def agile(
             end_date=end_date,
             goal=goal,
         )
-        return _json(sprint.to_simplified_dict())
+        return _json({"message": "Sprint created", "sprint": sprint.to_simplified_dict()})
 
     # update_sprint
+    require_write_access(ctx, "update sprint")
     if not sprint_id:
         raise ValueError("action='update_sprint' requires sprint_id.")
     sprint = jira.update_sprint(
@@ -1088,7 +1085,7 @@ async def agile(
     )
     if sprint is None:
         return _json({"error": f"Failed to update sprint {sprint_id}."})
-    return _json(sprint.to_simplified_dict())
+    return _json({"message": "Sprint updated", "sprint": sprint.to_simplified_dict()})
 
 
 @jira_mcp.tool(
@@ -1113,6 +1110,7 @@ async def versions(
     jira = await get_jira_fetcher(ctx)
     if name is None:
         return _json({"project": project_key, "versions": jira.get_project_versions(project_key)})
+    require_write_access(ctx, "create version")
     version = jira.create_project_version(
         project_key=project_key,
         name=name,

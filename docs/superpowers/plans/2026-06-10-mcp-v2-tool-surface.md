@@ -1406,10 +1406,9 @@ Expected: FAIL — tools not found
 
 - [ ] **Step 3: Implement the three tools**
 
+> **Read-only boundary note:** `agile` and `versions` stay tagged `read` (so the boards/sprints/list read sub-actions remain available in `--read-only` mode — tagging the whole tool `write` would wrongly hide the reads). Their write sub-actions (`create_sprint`, `update_sprint`, version create) are guarded INLINE via `require_write_access(ctx, "<action>")` (imported from `mcp_atlassian.utils.decorators`), which raises `ValueError(f"Cannot <action> in read-only mode.")`. Do NOT reintroduce these as `read`-only-tagged unguarded writes in Task 10. The `action` param is typed `Literal[...]` so pydantic rejects unknown actions at the boundary — no runtime `_AGILE_ACTIONS` membership check is needed.
+
 ```python
-_AGILE_ACTIONS = {"boards", "sprints", "sprint_issues", "create_sprint", "update_sprint"}
-
-
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Agile (Boards & Sprints)"},
@@ -1417,7 +1416,7 @@ _AGILE_ACTIONS = {"boards", "sprints", "sprint_issues", "create_sprint", "update
 async def agile(
     ctx: Context,
     action: Annotated[
-        str,
+        Literal["boards", "sprints", "sprint_issues", "create_sprint", "update_sprint"],
         Field(
             description=(
                 "'boards' (list boards), 'sprints' (list a board's sprints — "
@@ -1445,8 +1444,6 @@ async def agile(
     get_board_issues (use jira_find with JQL for board-issue queries).
     """
     jira = await get_jira_fetcher(ctx)
-    if action not in _AGILE_ACTIONS:
-        raise ValueError(f"Unknown action '{action}'. Valid: {sorted(_AGILE_ACTIONS)}.")
 
     if action == "boards":
         boards = jira.get_all_agile_boards_model(
@@ -1485,6 +1482,7 @@ async def agile(
         )
 
     if action == "create_sprint":
+        require_write_access(ctx, "create sprint")  # write sub-action guard
         if not (board_id and sprint_name and start_date and end_date):
             raise ValueError(
                 "action='create_sprint' requires board_id, sprint_name, "
@@ -1497,9 +1495,10 @@ async def agile(
             end_date=end_date,
             goal=goal,
         )
-        return _json(sprint.to_simplified_dict())
+        return _json({"message": "Sprint created", "sprint": sprint.to_simplified_dict()})
 
     # update_sprint
+    require_write_access(ctx, "update sprint")  # write sub-action guard
     if not sprint_id:
         raise ValueError("action='update_sprint' requires sprint_id.")
     sprint = jira.update_sprint(
@@ -1512,7 +1511,7 @@ async def agile(
     )
     if sprint is None:
         return _json({"error": f"Failed to update sprint {sprint_id}."})
-    return _json(sprint.to_simplified_dict())
+    return _json({"message": "Sprint updated", "sprint": sprint.to_simplified_dict()})
 
 
 @jira_mcp.tool(
@@ -1537,6 +1536,7 @@ async def versions(
     jira = await get_jira_fetcher(ctx)
     if name is None:
         return _json({"project": project_key, "versions": jira.get_project_versions(project_key)})
+    require_write_access(ctx, "create version")  # write sub-action guard
     version = jira.create_project_version(
         project_key=project_key,
         name=name,

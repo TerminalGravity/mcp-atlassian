@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mcp_atlassian.utils.decorators import check_write_access
+from mcp_atlassian.utils.decorators import check_write_access, require_write_access
 
 
 class DummyContext:
@@ -34,3 +34,16 @@ async def test_check_write_access_allows_in_writable():
     ctx = DummyContext(read_only=False)
     result = await dummy_tool(ctx, 4)
     assert result == 8
+
+
+def test_require_write_access_blocks_in_read_only():
+    ctx = DummyContext(read_only=True)
+    with pytest.raises(ValueError) as exc:
+        require_write_access(ctx, "create sprint")
+    assert "Cannot create sprint in read-only mode." in str(exc.value)
+
+
+def test_require_write_access_noop_when_writable():
+    ctx = DummyContext(read_only=False)
+    # Should not raise
+    assert require_write_access(ctx, "create sprint") is None

@@ -1911,3 +1911,60 @@ async def test_jira_projects_field_search(jira_client, mock_jira_fetcher):
     )
     content = json.loads(response.content[0].text)
     assert content["fields"][0]["id"] == "duedate"
+
+
+# --- v2 surface: read-only write-guard on mixed admin tools ------------------
+
+
+class _ROContext:
+    def __init__(self):
+        self.request_context = MagicMock()
+        self.request_context.lifespan_context = {
+            "app_lifespan_context": MagicMock(read_only=True)
+        }
+
+
+@pytest.mark.anyio
+async def test_jira_agile_create_sprint_blocked_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import agile
+    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+        with pytest.raises(ValueError, match="read-only"):
+            await agile.fn(_ROContext(), action="create_sprint", board_id="1", sprint_name="S", start_date="2026-01-01", end_date="2026-01-14")
+    mock_jira_fetcher.create_sprint.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_jira_agile_update_sprint_blocked_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import agile
+    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+        with pytest.raises(ValueError, match="read-only"):
+            await agile.fn(_ROContext(), action="update_sprint", sprint_id="42", state="closed")
+    mock_jira_fetcher.update_sprint.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_jira_agile_boards_allowed_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import agile
+    board = MagicMock(); board.to_simplified_dict.return_value = {"id":1,"name":"B","type":"scrum","project_key":"DS"}
+    mock_jira_fetcher.get_all_agile_boards_model.return_value = [board]
+    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+        out = await agile.fn(_ROContext(), action="boards")  # read must NOT raise in read-only
+    assert "boards" in json.loads(out)
+
+
+@pytest.mark.anyio
+async def test_jira_versions_create_blocked_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import versions
+    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+        with pytest.raises(ValueError, match="read-only"):
+            await versions.fn(_ROContext(), project_key="TEST", name="v9.9")
+    mock_jira_fetcher.create_project_version.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_jira_versions_list_allowed_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import versions
+    mock_jira_fetcher.get_project_versions.return_value = [{"name": "v1.0"}]
+    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+        out = await versions.fn(_ROContext(), project_key="TEST")  # read must NOT raise
+    assert json.loads(out)["versions"][0]["name"] == "v1.0"
