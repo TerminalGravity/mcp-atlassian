@@ -1587,6 +1587,33 @@ def test_operation_response_never_fails_on_unserializable_issue():
     assert parsed["key"] == "DS-1"  # explicit issue_key wins over garbage
 
 
+def test_operation_response_degrades_when_shaping_raises_and_key_is_garbage():
+    """The shaping-exception branch must not adopt a non-string issue.key."""
+    from src.mcp_atlassian.servers.jira import _operation_response
+
+    class _ExplodingIssue:
+        key = MagicMock()  # garbage, must NOT be adopted
+
+        def to_simplified_dict(self):
+            raise RuntimeError("boom")
+
+    class _StubJiraCfg:
+        class config:
+            url = "https://test.example.com"
+
+    out = _operation_response(
+        _StubJiraCfg(),
+        message="Issue created successfully",
+        issue=_ExplodingIssue(),
+        issue_key=None,  # the create_issue call-site shape
+        return_mode="summary",
+    )
+    parsed = json.loads(out)  # must parse
+    assert parsed["message"] == "Issue created successfully"
+    assert "response_shaping_error" in parsed
+    assert "key" not in parsed or parsed["key"] is None or isinstance(parsed["key"], str)
+
+
 @pytest.mark.anyio
 async def test_jira_transition_rejects_bogus_return_mode(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.get_available_transitions.return_value = [

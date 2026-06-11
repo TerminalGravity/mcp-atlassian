@@ -197,8 +197,8 @@ def _resolve_transition_id(
         raise ValueError(
             f"No transition from {issue_key}'s current status matches "
             f"'{status_name}'. Available transitions: {available or 'none'}. "
-            "Retry with one of those names as status_name, or pass the id "
-            "as transition_id."
+            "Retry with one of those names as the target status name, or "
+            "pass the id as transition_id."
         )
     return str(match.get("id"))
 
@@ -616,6 +616,8 @@ async def transition(
     Replaces transition_issue / batch_transition / get_transitions. The
     response includes next_transitions (single-key), so no lookup call is
     ever needed. Batch failures are per-key — one bad key never aborts the rest.
+    Single key → issue envelope + next_transitions; multiple keys →
+    {target, summary: {ok, fail, total}, results: [...]}.
     """
     jira = await get_jira_fetcher(ctx)
     key_list = _parse_csv(keys) or []
