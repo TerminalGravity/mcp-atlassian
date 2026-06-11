@@ -5,13 +5,13 @@
 > Spec: `docs/superpowers/specs/2026-06-10-mcp-v2-tool-surface-design.md`
 > Plan: `docs/superpowers/plans/2026-06-10-mcp-v2-tool-surface.md` (13 tasks, full code per task)
 
-**Last updated:** 2026-06-11 (after Task 7 close; Task 8 in progress)
+**Last updated:** 2026-06-11 (after Task 8 close; Task 9 in progress)
 
 ## Where the work lives
 
 - **Worktree:** `/Users/jack/Developer/mcp-atlassian/.claude/worktrees/mcp-v2-surface`
 - **Branch:** `worktree-mcp-v2-surface` (based on local `main` @ 4e57742 — includes the v1-bridge commit 4154e5d the plan depends on; `origin/main` is BEHIND local main, do not rebase onto origin)
-- **Test command:** `uv run pytest tests/unit/servers/ -q` — current baseline: **136 passed, 0 failed**
+- **Test command:** `uv run pytest tests/unit/servers/ -q` — current baseline: **168 passed, 0 failed** (full `tests/unit/` ~1265 passed)
 - **Process:** superpowers:subagent-driven-development — fresh implementer subagent per task (sonnet), then spec-compliance review, then code-quality review (superpowers:code-reviewer), fix loops until approved. Full task text is pasted into each subagent prompt from the plan file (never make the subagent read the plan).
 
 ## Task board
@@ -25,8 +25,8 @@
 | 5 | `jira_link` — epic/web/issue + removal | ✅ DONE (re-review approved, branch coverage added) | a49af7e, 5330722, dc6f843 |
 | 6 | `jira_worklog` — read/add | ✅ DONE (spec-verified inline; trivial) | 9428d28 |
 | 7 | `jira_agile` / `jira_versions` / `jira_projects` + read-only write-guard | ✅ DONE (spec ✅, quality ✅, read-only regression fixed + mutation-tested) | 19c93a3, af5c888 |
-| 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | 🔨 IN PROGRESS | — |
-| 9 | `jira_handoff` — context-reset snapshot | ⬜ pending | — |
+| 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | ✅ DONE (spec ✅, quality ✅, 3021→334 lines) | 8a40423, 6e5136d |
+| 9 | `jira_handoff` — context-reset snapshot | 🔨 IN PROGRESS | — |
 | 10 | Clean break — delete 31 legacy Jira tools, rename create/update/assign/delete | ⬜ pending | — |
 | 11 | Confluence 12 → 4 | ⬜ pending | — |
 | 12 | Docs/skills sweep + budget evals | ⬜ pending | — |
