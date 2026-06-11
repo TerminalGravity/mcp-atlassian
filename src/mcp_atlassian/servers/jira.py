@@ -1156,6 +1156,79 @@ async def projects(
     return _json({"projects": ResponseFormatter.compress_projects(all_projects)[:limit]})
 
 
+def _handoff_line(raw: dict[str, Any]) -> dict[str, Any]:
+    c = ResponseFormatter.compress_issue(raw, include_description=False)
+    return {
+        "key": c.get("key"),
+        "status": c.get("status"),
+        "priority": c.get("priority"),
+        "summary": (c.get("summary") or "")[:100],
+        "updated": c.get("updated"),
+    }
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Handoff Snapshot", "readOnlyHint": True},
+)
+async def handoff(
+    ctx: Context,
+    projects: Annotated[
+        str | None,
+        Field(description="(Optional) Comma-separated project keys to scope the snapshot.", default=None),
+    ] = None,
+    days: Annotated[
+        int,
+        Field(description="Recency window for 'recently updated' (days).", default=3, ge=1, le=30),
+    ] = 3,
+    limit: Annotated[
+        int,
+        Field(description="Max issues per section.", default=15, ge=1, le=30),
+    ] = 15,
+) -> str:
+    """Compact resumable state snapshot (~500 tokens) for context resets.
+
+    Emits my open issues and my recently-updated issues as one-line cards.
+    A fresh agent ingests this and resumes work without re-deriving state —
+    call it at the start of a session or after a context reset instead of
+    re-fetching individual issues.
+    """
+    jira = await get_jira_fetcher(ctx)
+    scope = ""
+    project_list = _parse_csv(projects)
+    if project_list:
+        quoted = ", ".join(f'"{p}"' for p in project_list)
+        scope = f" AND project in ({quoted})"
+    fields = ["summary", "status", "priority", "updated"]
+
+    open_result = jira.search_issues(
+        jql=f"assignee = currentUser() AND resolution = Unresolved{scope} "
+        "ORDER BY updated DESC",
+        fields=fields,
+        limit=limit,
+    )
+    recent_result = jira.search_issues(
+        jql=f"assignee = currentUser() AND updated >= -{days}d{scope} "
+        "ORDER BY updated DESC",
+        fields=fields,
+        limit=limit,
+    )
+    return _json(
+        {
+            "note": (
+                "State snapshot for context reset — ingest and resume. "
+                "Use jira_get for any issue needing detail."
+            ),
+            "open_issues": [
+                _handoff_line(i.to_simplified_dict()) for i in open_result.issues
+            ],
+            "recently_updated": [
+                _handoff_line(i.to_simplified_dict()) for i in recent_result.issues
+            ],
+        }
+    )
+
+
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},

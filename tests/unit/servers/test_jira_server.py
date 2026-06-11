@@ -299,6 +299,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         get_transitions,
         get_user_profile,
         get_worklog,
+        handoff,
         link,
         link_to_epic,
         projects,
@@ -351,6 +352,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     jira_sub_mcp.add_tool(agile)
     jira_sub_mcp.add_tool(versions)
     jira_sub_mcp.add_tool(projects)
+    jira_sub_mcp.add_tool(handoff)
     test_mcp.mount(jira_sub_mcp, prefix="jira")
     return test_mcp
 
@@ -1968,3 +1970,27 @@ async def test_jira_versions_list_allowed_in_read_only(mock_jira_fetcher):
     with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
         out = await versions.fn(_ROContext(), project_key="TEST")  # read must NOT raise
     assert json.loads(out)["versions"][0]["name"] == "v1.0"
+
+
+# --- v2 surface: jira_handoff ------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_handoff_snapshot(jira_client, mock_jira_fetcher):
+    response = await jira_client.call_tool("jira_handoff", {})
+    content = json.loads(response.content[0].text)
+    assert "open_issues" in content
+    assert "recently_updated" in content
+    # two JQL queries: open + recent
+    assert mock_jira_fetcher.search_issues.call_count >= 2
+    first_jql = mock_jira_fetcher.search_issues.call_args_list[0].kwargs["jql"]
+    assert "currentUser()" in first_jql
+    # budget: snapshot stays compact
+    assert len(response.content[0].text) < 8000
+
+
+@pytest.mark.anyio
+async def test_jira_handoff_project_scope(jira_client, mock_jira_fetcher):
+    await jira_client.call_tool("jira_handoff", {"projects": "DS,AI"})
+    first_jql = mock_jira_fetcher.search_issues.call_args_list[0].kwargs["jql"]
+    assert 'project in ("DS", "AI")' in first_jql
