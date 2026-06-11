@@ -5,7 +5,7 @@
 > Spec: `docs/superpowers/specs/2026-06-10-mcp-v2-tool-surface-design.md`
 > Plan: `docs/superpowers/plans/2026-06-10-mcp-v2-tool-surface.md` (13 tasks, full code per task)
 
-**Last updated:** 2026-06-11 (after Task 8 close; Task 9 in progress)
+**Last updated:** 2026-06-11 (after Task 10 close — clean break done; Task 11 next)
 
 ## Where the work lives
 
@@ -26,8 +26,8 @@
 | 6 | `jira_worklog` — read/add | ✅ DONE (spec-verified inline; trivial) | 9428d28 |
 | 7 | `jira_agile` / `jira_versions` / `jira_projects` + read-only write-guard | ✅ DONE (spec ✅, quality ✅, read-only regression fixed + mutation-tested) | 19c93a3, af5c888 |
 | 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | ✅ DONE (spec ✅, quality ✅, 3021→334 lines) | 8a40423, 6e5136d |
-| 9 | `jira_handoff` — context-reset snapshot | 🔨 IN PROGRESS | — |
-| 10 | Clean break — delete 31 legacy Jira tools, rename create/update/assign/delete | ⬜ pending | — |
+| 9 | `jira_handoff` — context-reset snapshot | ✅ DONE (spec ✅, quality ✅, real budget test) | 53b543c, 1662b49 |
+| 10 | Clean break — delete 37 legacy, rename create/update/assign/delete → 14 tools | ✅ DONE (spec ✅ all 9 checks, quality ✅, lint 319→21) | a2ad28e |
 | 11 | Confluence 12 → 4 | ⬜ pending | — |
 | 12 | Docs/skills sweep + budget evals | ⬜ pending | — |
 | 13 | Live dogfood pass (needs user to reconnect MCP) | ⬜ pending | — |
@@ -45,6 +45,9 @@ Pre-task baseline commit: bcd78c0 (fixed pre-existing `test_create_issue` failur
 - Also confirm Task 7's plan amendment (read-only note in the plan's Task 7 section) is honored.
 
 **Into Task 12 (sweep/evals):**
+- Add server-layer tests for `jira_update` / `jira_assign` / `jira_delete` — they have NO MCP-tool-boundary tests (pre-existing gap, not caused by Task 10; bodies are covered indirectly at the mixin layer in tests/unit/jira/). Cover arg parsing, return_mode shaping, @check_write_access.
+- Restore `jira_projects` filter/error-path coverage: Task 10 collapsed ~10 get_all_projects tests into 1 happy-path `test_jira_projects_list`. Untested now: include_archived=True branch, projects-filter narrowing, auth/config error paths through the tool.
+- Trivial: F841 unused `deleted` var in the `delete` tool (jira.py ~1712) — clean up when keeper bodies are next touched.
 - Promote `ResponseFormatter._relative_timestamp` → public `relative_timestamp`; update the external use in jira.py (`_issue_card` latest_comments).
 - If budget evals flag `include="changelog"` payloads: cap to last-N + total count (mirror latest_comments/comments_total).
 - Truncation limits shipped as 400 (description) / 200 (comment body), not the plan's 500/300 — done to hold the <1500-byte card budget; document in spec if touched.
