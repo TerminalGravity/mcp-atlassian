@@ -307,6 +307,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         transition_issue,
         update_issue,
         update_sprint,
+        worklog,
     )
 
     jira_sub_mcp = FastMCP(name="TestJiraSubMCP")
@@ -336,6 +337,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     jira_sub_mcp.add_tool(add_worklog)
     jira_sub_mcp.add_tool(comment)
     jira_sub_mcp.add_tool(link)
+    jira_sub_mcp.add_tool(worklog)
     jira_sub_mcp.add_tool(link_to_epic)
     jira_sub_mcp.add_tool(create_issue_link)
     jira_sub_mcp.add_tool(remove_issue_link)
@@ -1809,3 +1811,28 @@ async def test_jira_link_remove(jira_client, mock_jira_fetcher):
     content = json.loads(response.content[0].text)
     assert content["success"] is True
     mock_jira_fetcher.remove_issue_link.assert_called_once_with("10500")
+
+
+# --- v2 surface: jira_worklog -----------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_worklog_read(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_worklogs.return_value = [
+        {"id": "1", "timeSpent": "1h", "comment": "did stuff"}
+    ]
+    response = await jira_client.call_tool("jira_worklog", {"issue_key": "TEST-123"})
+    content = json.loads(response.content[0].text)
+    assert content["worklogs"][0]["timeSpent"] == "1h"
+    mock_jira_fetcher.get_worklogs.assert_called_once_with("TEST-123")
+
+
+@pytest.mark.anyio
+async def test_jira_worklog_add(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.add_worklog.return_value = {"id": "2", "timeSpent": "30m"}
+    response = await jira_client.call_tool(
+        "jira_worklog", {"issue_key": "TEST-123", "time_spent": "30m"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["worklog"]["timeSpent"] == "30m"
+    mock_jira_fetcher.add_worklog.assert_called_once()

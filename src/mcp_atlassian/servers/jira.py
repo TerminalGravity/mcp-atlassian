@@ -933,6 +933,57 @@ async def link(
 
 
 @jira_mcp.tool(
+    tags={"jira", "write"},
+    annotations={"title": "Worklog", "destructiveHint": True},
+)
+@check_write_access
+async def worklog(
+    ctx: Context,
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    time_spent: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Time to log, Jira format ('1h 30m', '1d', '30m'). "
+                "Omit to READ the issue's worklogs instead of adding one."
+            ),
+            default=None,
+        ),
+    ] = None,
+    comment: Annotated[
+        str | None, Field(description="(Optional, add) Worklog comment.", default=None)
+    ] = None,
+    started: Annotated[
+        str | None,
+        Field(description="(Optional, add) ISO start time; defaults to now.", default=None),
+    ] = None,
+    original_estimate: Annotated[
+        str | None, Field(description="(Optional, add) New original estimate.", default=None)
+    ] = None,
+    remaining_estimate: Annotated[
+        str | None, Field(description="(Optional, add) New remaining estimate.", default=None)
+    ] = None,
+) -> str:
+    """Read worklogs (no time_spent) or add one (time_spent given).
+
+    Replaces get_worklog / add_worklog.
+    """
+    jira = await get_jira_fetcher(ctx)
+    if time_spent is None:
+        worklogs = jira.get_worklogs(issue_key)
+        return _json({"key": issue_key, "worklogs": worklogs})
+    result = jira.add_worklog(
+        issue_key=issue_key,
+        time_spent=time_spent,
+        comment=comment,
+        started=started,
+        original_estimate=original_estimate,
+        remaining_estimate=remaining_estimate,
+    )
+    return _json({"message": "Worklog added successfully", "key": issue_key, "worklog": result})
+
+
+@jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},
 )
