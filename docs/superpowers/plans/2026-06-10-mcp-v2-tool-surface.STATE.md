@@ -5,7 +5,7 @@
 > Spec: `docs/superpowers/specs/2026-06-10-mcp-v2-tool-surface-design.md`
 > Plan: `docs/superpowers/plans/2026-06-10-mcp-v2-tool-surface.md` (13 tasks, full code per task)
 
-**Last updated:** 2026-06-11 (after Task 3 close)
+**Last updated:** 2026-06-11 (after Task 5 close; Task 6 in progress)
 
 ## Where the work lives
 
@@ -21,9 +21,9 @@
 | 1 | `jira_get` — multi-key reader, summary truncation | ✅ DONE (re-review approved) | 8a7d4f8, 9af60a9, 243f691 |
 | 2 | `jira_find` — JQL/semantic/similar-to | ✅ DONE (re-review approved) | 3f1e389, 4d138fa |
 | 3 | `jira_transition` — single/batch by name + B2 envelope hardening | ✅ DONE (spec ✅, quality ✅, follow-ups committed) | 4be18c7, 3fcea13, 8b51a2f |
-| 4 | `jira_comment` — add/edit + body_preview | ⬜ NEXT | — |
-| 5 | `jira_link` — epic/web/issue + removal | ⬜ pending | — |
-| 6 | `jira_worklog` — read/add | ⬜ pending | — |
+| 4 | `jira_comment` — add/edit + body_preview | ✅ DONE (re-review approved) | 9e77e91, 2a32831 |
+| 5 | `jira_link` — epic/web/issue + removal | ✅ DONE (re-review approved, branch coverage added) | a49af7e, 5330722, dc6f843 |
+| 6 | `jira_worklog` — read/add | 🔨 IN PROGRESS | — |
 | 7 | `jira_agile` / `jira_versions` / `jira_projects` | ⬜ pending | — |
 | 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | ⬜ pending | — |
 | 9 | `jira_handoff` — context-reset snapshot | ⬜ pending | — |
@@ -54,6 +54,17 @@ Pre-task baseline commit: bcd78c0 (fixed pre-existing `test_create_issue` failur
 3. **Latent bug (Task 3):** `_operation_response`'s last-resort fallback could itself raise on a non-serializable key, violating the B2 "successful write never errors" guarantee → hardened with 3 guards + 2 unit tests.
 
 Pattern: implementer (sonnet) + two-stage review catches ~1 real defect per task. Do not skip reviews.
+
+## ⚠️ Main-branch divergence (merge consideration for Task 10 / finishing)
+
+A PARALLEL session has advanced `main` past this worktree's base (4e57742) with at least:
+- `8a93e36` "feat(jira): account_id in user-profile payload + upload_attachment tool" (adds `account_id` to JiraUser.to_simplified_dict + a `jira_upload_attachment` tool)
+
+The worktree is isolated and unaffected, but at merge/finish time:
+- The v2 clean break DELETES `get_user_profile` (folded into `jira_projects`) and does NOT include `upload_attachment` — reconcile: either fold `account_id` into `jira_projects`' user lookup, and decide whether `upload_attachment` joins the v2 surface (it's a legit tool the corpus didn't cover) or is dropped.
+- Expect a non-trivial merge on `jira.py` / `test_jira_server.py`. Diff `main` against the worktree branch before merging; do NOT fast-forward.
+
+NOTE for reviewers: this worktree lives at `.claude/worktrees/mcp-v2-surface`. ALWAYS run git/pytest from there. Running them in the main repo root (`/Users/jack/Developer/mcp-atlassian/`) shows `main`, which legitimately lacks the v2 work — that is NOT a revert (one reviewer tripped on this).
 
 ## Conventions locked in (apply to all remaining tasks)
 
