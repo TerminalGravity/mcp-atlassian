@@ -1740,6 +1740,24 @@ async def test_jira_link_web(jira_client, mock_jira_fetcher):
 
 
 @pytest.mark.anyio
+async def test_jira_link_issue_link_success(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_issue_link_types.return_value = [
+        {"id": "1", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+    ]
+    mock_jira_fetcher.create_issue_link.return_value = {"success": True}
+    response = await jira_client.call_tool(
+        "jira_link",
+        {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "blocks"},  # lowercase, matches via outward→name Blocks
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["key"] == "TEST-1"
+    mock_jira_fetcher.create_issue_link.assert_called_once_with(
+        {"type": {"name": "Blocks"}, "inwardIssue": {"key": "TEST-1"}, "outwardIssue": {"key": "TEST-2"}}
+    )
+
+
+@pytest.mark.anyio
 async def test_jira_link_issue_link_unknown_type_lists_valid(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.get_issue_link_types.return_value = [
         {"id": "1", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},

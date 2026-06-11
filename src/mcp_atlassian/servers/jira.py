@@ -838,8 +838,14 @@ async def link(
 
     Replaces link_to_epic / create_issue_link / create_remote_issue_link /
     remove_issue_link / get_link_types. 'epic' and 'web' are special kinds;
-    everything else is matched (case-insensitive) against the instance's
-    issue-link type names.
+    everything else is matched against the instance's issue-link types —
+    exact type NAME first (case-insensitive), then relationship phrase
+    (inward/outward) as a fallback (an ambiguous phrase match errors).
+
+    Every create returns a consistent envelope: ``success``, ``key`` (the
+    FROM issue), and a human-readable ``message``. Web links carry only
+    url + title — the legacy tool's relationship/icon/summary fields are
+    intentionally dropped.
     """
     jira = await get_jira_fetcher(ctx)
 
@@ -861,6 +867,7 @@ async def link(
             issue=issue,
             issue_key=issue_key,
             return_mode="minimal",
+            extra={"success": True},
         )
 
     if kind == "web":
@@ -870,17 +877,40 @@ async def link(
         out = result if isinstance(result, dict) else {}
         out.setdefault("success", True)
         out["key"] = issue_key
+        out["message"] = f"Linked {issue_key} to {to}"
         return _json(out)
 
+    # Match exact type NAME first across all types; only on no name match
+    # fall back to relationship phrases (inward/outward). A phrase that
+    # matches more than one type is ambiguous — error rather than guess.
     types = _link_type_dicts(jira)
-    canonical = None
-    for t in types:
-        for candidate in (t.get("name"), t.get("inward"), t.get("outward")):
-            if candidate and str(candidate).casefold() == kind:
-                canonical = t.get("name")
-                break
-        if canonical:
-            break
+    canonical = next(
+        (
+            t["name"]
+            for t in types
+            if t.get("name") and str(t["name"]).casefold() == kind
+        ),
+        None,
+    )
+    if canonical is None:
+        phrase_matches = [
+            t["name"]
+            for t in types
+            if t.get("name")
+            and kind
+            in (
+                str(t.get("inward", "")).casefold(),
+                str(t.get("outward", "")).casefold(),
+            )
+        ]
+        if len(phrase_matches) == 1:
+            canonical = phrase_matches[0]
+        elif len(phrase_matches) > 1:
+            raise ValueError(
+                f"Ambiguous link_type '{link_type}' matches multiple types by "
+                f"relationship phrase: {sorted(set(phrase_matches))}. Use the "
+                "exact type name instead."
+            )
     if canonical is None:
         names = ", ".join(sorted({str(t.get("name")) for t in types if t.get("name")}))
         raise ValueError(
@@ -898,6 +928,7 @@ async def link(
     out = result if isinstance(result, dict) else {}
     out.setdefault("success", True)
     out["key"] = issue_key
+    out["message"] = f"Linked {issue_key} {canonical} {to}"
     return _json(out)
 
 
