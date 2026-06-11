@@ -983,6 +983,181 @@ async def worklog(
     return _json({"message": "Worklog added successfully", "key": issue_key, "worklog": result})
 
 
+_AGILE_ACTIONS = {"boards", "sprints", "sprint_issues", "create_sprint", "update_sprint"}
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Agile (Boards & Sprints)"},
+)
+async def agile(
+    ctx: Context,
+    action: Annotated[
+        Literal["boards", "sprints", "sprint_issues", "create_sprint", "update_sprint"],
+        Field(
+            description=(
+                "'boards' (list boards), 'sprints' (list a board's sprints — "
+                "needs board_id), 'sprint_issues' (needs sprint_id), "
+                "'create_sprint' (needs board_id + sprint_name + start_date + "
+                "end_date), 'update_sprint' (needs sprint_id)."
+            )
+        ),
+    ],
+    board_id: Annotated[str | None, Field(description="Board id (sprints / create_sprint).", default=None)] = None,
+    sprint_id: Annotated[str | None, Field(description="Sprint id (sprint_issues / update_sprint).", default=None)] = None,
+    project_key: Annotated[str | None, Field(description="(boards) Filter by project.", default=None)] = None,
+    board_name: Annotated[str | None, Field(description="(boards) Fuzzy name filter.", default=None)] = None,
+    board_type: Annotated[str | None, Field(description="(boards) 'scrum' or 'kanban'.", default=None)] = None,
+    state: Annotated[str | None, Field(description="(sprints) 'active'|'future'|'closed'; (update_sprint) new state.", default=None)] = None,
+    sprint_name: Annotated[str | None, Field(description="(create/update_sprint) Sprint name.", default=None)] = None,
+    start_date: Annotated[str | None, Field(description="(create/update_sprint) ISO 8601 start.", default=None)] = None,
+    end_date: Annotated[str | None, Field(description="(create/update_sprint) ISO 8601 end.", default=None)] = None,
+    goal: Annotated[str | None, Field(description="(create/update_sprint) Sprint goal.", default=None)] = None,
+    limit: Annotated[int, Field(description="Max results (1-50)", default=10, ge=1, le=50)] = 10,
+    start_at: Annotated[int, Field(description="Pagination offset", default=0, ge=0)] = 0,
+) -> str:
+    """Boards and sprints, one tool. Replaces get_agile_boards /
+    get_sprints_from_board / get_sprint_issues / create_sprint / update_sprint /
+    get_board_issues (use jira_find with JQL for board-issue queries).
+    """
+    jira = await get_jira_fetcher(ctx)
+    if action not in _AGILE_ACTIONS:
+        raise ValueError(f"Unknown action '{action}'. Valid: {sorted(_AGILE_ACTIONS)}.")
+
+    if action == "boards":
+        boards = jira.get_all_agile_boards_model(
+            board_name=board_name,
+            project_key=project_key,
+            board_type=board_type,
+            start=start_at,
+            limit=limit,
+        )
+        return _json(
+            {"boards": ResponseFormatter.compress_boards(
+                [b.to_simplified_dict() for b in boards]
+            )}
+        )
+
+    if action == "sprints":
+        if not board_id:
+            raise ValueError("action='sprints' requires board_id.")
+        sprints = jira.get_all_sprints_from_board_model(
+            board_id=board_id, state=state, start=start_at, limit=limit
+        )
+        return _json(
+            {"sprints": ResponseFormatter.compress_sprints(
+                [s.to_simplified_dict() for s in sprints]
+            )}
+        )
+
+    if action == "sprint_issues":
+        if not sprint_id:
+            raise ValueError("action='sprint_issues' requires sprint_id.")
+        search_result = jira.get_sprint_issues(
+            sprint_id=sprint_id, fields=SUMMARY_FIELDS, start=start_at, limit=limit
+        )
+        return _json(
+            ResponseFormatter.compress_search_result(search_result.to_simplified_dict())
+        )
+
+    if action == "create_sprint":
+        if not (board_id and sprint_name and start_date and end_date):
+            raise ValueError(
+                "action='create_sprint' requires board_id, sprint_name, "
+                "start_date, end_date."
+            )
+        sprint = jira.create_sprint(
+            board_id=board_id,
+            sprint_name=sprint_name,
+            start_date=start_date,
+            end_date=end_date,
+            goal=goal,
+        )
+        return _json(sprint.to_simplified_dict())
+
+    # update_sprint
+    if not sprint_id:
+        raise ValueError("action='update_sprint' requires sprint_id.")
+    sprint = jira.update_sprint(
+        sprint_id=sprint_id,
+        sprint_name=sprint_name,
+        state=state,
+        start_date=start_date,
+        end_date=end_date,
+        goal=goal,
+    )
+    if sprint is None:
+        return _json({"error": f"Failed to update sprint {sprint_id}."})
+    return _json(sprint.to_simplified_dict())
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Project Versions"},
+)
+async def versions(
+    ctx: Context,
+    project_key: Annotated[str, Field(description="Jira project key (e.g., 'PROJ')")],
+    name: Annotated[
+        str | None,
+        Field(description="(Optional) Provide to CREATE a version with this name; omit to list.", default=None),
+    ] = None,
+    start_date: Annotated[str | None, Field(description="(create) Start date YYYY-MM-DD.", default=None)] = None,
+    release_date: Annotated[str | None, Field(description="(create) Release date YYYY-MM-DD.", default=None)] = None,
+    description: Annotated[str | None, Field(description="(create) Version description.", default=None)] = None,
+) -> str:
+    """List a project's fix versions, or create one (name given).
+
+    Replaces get_project_versions / create_version / batch_create_versions.
+    """
+    jira = await get_jira_fetcher(ctx)
+    if name is None:
+        return _json({"project": project_key, "versions": jira.get_project_versions(project_key)})
+    version = jira.create_project_version(
+        project_key=project_key,
+        name=name,
+        start_date=start_date,
+        release_date=release_date,
+        description=description,
+    )
+    return _json({"message": "Version created", "version": version})
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Projects, Fields & Users", "readOnlyHint": True},
+)
+async def projects(
+    ctx: Context,
+    field_keyword: Annotated[
+        str | None,
+        Field(description="(Optional) Fuzzy-search Jira field definitions instead of listing projects.", default=None),
+    ] = None,
+    user: Annotated[
+        str | None,
+        Field(description="(Optional) Look up a user (email / name / accountId) instead of listing projects.", default=None),
+    ] = None,
+    include_archived: Annotated[bool, Field(description="Include archived projects.", default=False)] = False,
+    limit: Annotated[int, Field(description="Max results", default=20, ge=1, le=100)] = 20,
+) -> str:
+    """Workspace discovery: project list (default), field schema search
+    (field_keyword), or user lookup (user).
+
+    Replaces get_all_projects / search_fields / get_user_profile.
+    """
+    jira = await get_jira_fetcher(ctx)
+    if user is not None:
+        try:
+            found = jira.get_user_profile_by_identifier(user)
+            return _json({"success": True, "user": found.to_simplified_dict()})
+        except Exception as e:
+            return _json({"success": False, "error": str(e), "user_identifier": user})
+    if field_keyword is not None:
+        return _json({"fields": jira.search_fields(field_keyword, limit=limit)})
+    all_projects = jira.get_all_projects(include_archived=include_archived)
+    return _json({"projects": ResponseFormatter.compress_projects(all_projects)[:limit]})
+
+
 @jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Get User Profile", "readOnlyHint": True},

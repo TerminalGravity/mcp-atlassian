@@ -276,6 +276,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     from src.mcp_atlassian.servers.jira import (
         add_comment,
         add_worklog,
+        agile,
         batch_create_issues,
         batch_create_versions,
         batch_get_changelogs,
@@ -300,6 +301,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         get_worklog,
         link,
         link_to_epic,
+        projects,
         remove_issue_link,
         search,
         search_fields,
@@ -307,6 +309,7 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         transition_issue,
         update_issue,
         update_sprint,
+        versions,
         worklog,
     )
 
@@ -345,6 +348,9 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
     jira_sub_mcp.add_tool(transition_issue)
     jira_sub_mcp.add_tool(update_sprint)
     jira_sub_mcp.add_tool(batch_create_versions)
+    jira_sub_mcp.add_tool(agile)
+    jira_sub_mcp.add_tool(versions)
+    jira_sub_mcp.add_tool(projects)
     test_mcp.mount(jira_sub_mcp, prefix="jira")
     return test_mcp
 
@@ -1836,3 +1842,72 @@ async def test_jira_worklog_add(jira_client, mock_jira_fetcher):
     content = json.loads(response.content[0].text)
     assert content["worklog"]["timeSpent"] == "30m"
     mock_jira_fetcher.add_worklog.assert_called_once()
+
+
+# --- v2 surface: admin tools -------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_agile_boards(jira_client, mock_jira_fetcher):
+    board = MagicMock()
+    board.to_simplified_dict.return_value = {
+        "id": 1, "name": "DS board", "type": "scrum", "project_key": "DS",
+    }
+    mock_jira_fetcher.get_all_agile_boards_model.return_value = [board]
+    response = await jira_client.call_tool("jira_agile", {"action": "boards"})
+    content = json.loads(response.content[0].text)
+    assert content["boards"][0]["name"] == "DS board"
+
+
+@pytest.mark.anyio
+async def test_jira_agile_sprints_requires_board_id(jira_client):
+    with pytest.raises(Exception, match="board_id"):
+        await jira_client.call_tool("jira_agile", {"action": "sprints"})
+
+
+@pytest.mark.anyio
+async def test_jira_agile_rejects_unknown_action(jira_client):
+    with pytest.raises(Exception, match="boards"):
+        await jira_client.call_tool("jira_agile", {"action": "bogus"})
+
+
+@pytest.mark.anyio
+async def test_jira_versions_list(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_project_versions.return_value = [{"name": "v1.0"}]
+    response = await jira_client.call_tool("jira_versions", {"project_key": "TEST"})
+    content = json.loads(response.content[0].text)
+    assert content["versions"][0]["name"] == "v1.0"
+
+
+@pytest.mark.anyio
+async def test_jira_versions_create(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.create_project_version.return_value = {"name": "v2.0"}
+    response = await jira_client.call_tool(
+        "jira_versions", {"project_key": "TEST", "name": "v2.0"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["version"]["name"] == "v2.0"
+    mock_jira_fetcher.create_project_version.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_jira_projects_user_lookup(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_user_profile_by_identifier.return_value.to_simplified_dict.return_value = {"account_id": "x", "display_name": "Test User"}
+    response = await jira_client.call_tool(
+        "jira_projects", {"user": "user@example.com"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    mock_jira_fetcher.get_user_profile_by_identifier.assert_called_once_with(
+        "user@example.com"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_projects_field_search(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.search_fields.return_value = [{"id": "duedate", "name": "Due date"}]
+    response = await jira_client.call_tool(
+        "jira_projects", {"field_keyword": "due"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["fields"][0]["id"] == "duedate"
