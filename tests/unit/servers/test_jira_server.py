@@ -1747,7 +1747,7 @@ async def test_jira_link_issue_link_success(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.create_issue_link.return_value = {"success": True}
     response = await jira_client.call_tool(
         "jira_link",
-        {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "blocks"},  # lowercase, matches via outward→name Blocks
+        {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "blocks"},  # case-insensitive NAME match ("blocks" == "Blocks".casefold())
     )
     content = json.loads(response.content[0].text)
     assert content["success"] is True
@@ -1755,6 +1755,36 @@ async def test_jira_link_issue_link_success(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.create_issue_link.assert_called_once_with(
         {"type": {"name": "Blocks"}, "inwardIssue": {"key": "TEST-1"}, "outwardIssue": {"key": "TEST-2"}}
     )
+
+
+@pytest.mark.anyio
+async def test_jira_link_issue_link_matches_by_phrase(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_issue_link_types.return_value = [
+        {"id": "1", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+    ]
+    mock_jira_fetcher.create_issue_link.return_value = {"success": True}
+    response = await jira_client.call_tool(
+        "jira_link",
+        {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "is blocked by"},  # phrase, not a name
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    mock_jira_fetcher.create_issue_link.assert_called_once_with(
+        {"type": {"name": "Blocks"}, "inwardIssue": {"key": "TEST-1"}, "outwardIssue": {"key": "TEST-2"}}
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_link_issue_link_ambiguous_phrase_raises(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.get_issue_link_types.return_value = [
+        {"id": "1", "name": "Relates", "inward": "relates to", "outward": "relates to"},
+        {"id": "2", "name": "Mentions", "inward": "relates to", "outward": "relates to"},
+    ]
+    with pytest.raises(Exception, match="[Aa]mbiguous"):
+        await jira_client.call_tool(
+            "jira_link",
+            {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "relates to"},
+        )
 
 
 @pytest.mark.anyio
