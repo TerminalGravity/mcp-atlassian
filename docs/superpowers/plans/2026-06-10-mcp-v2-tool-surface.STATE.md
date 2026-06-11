@@ -5,7 +5,7 @@
 > Spec: `docs/superpowers/specs/2026-06-10-mcp-v2-tool-surface-design.md`
 > Plan: `docs/superpowers/plans/2026-06-10-mcp-v2-tool-surface.md` (13 tasks, full code per task)
 
-**Last updated:** 2026-06-11 (after Task 5 close; Task 6 in progress)
+**Last updated:** 2026-06-11 (after Task 7 close; Task 8 in progress)
 
 ## Where the work lives
 
@@ -23,9 +23,9 @@
 | 3 | `jira_transition` — single/batch by name + B2 envelope hardening | ✅ DONE (spec ✅, quality ✅, follow-ups committed) | 4be18c7, 3fcea13, 8b51a2f |
 | 4 | `jira_comment` — add/edit + body_preview | ✅ DONE (re-review approved) | 9e77e91, 2a32831 |
 | 5 | `jira_link` — epic/web/issue + removal | ✅ DONE (re-review approved, branch coverage added) | a49af7e, 5330722, dc6f843 |
-| 6 | `jira_worklog` — read/add | 🔨 IN PROGRESS | — |
-| 7 | `jira_agile` / `jira_versions` / `jira_projects` | ⬜ pending | — |
-| 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | ⬜ pending | — |
+| 6 | `jira_worklog` — read/add | ✅ DONE (spec-verified inline; trivial) | 9428d28 |
+| 7 | `jira_agile` / `jira_versions` / `jira_projects` + read-only write-guard | ✅ DONE (spec ✅, quality ✅, read-only regression fixed + mutation-tested) | 19c93a3, af5c888 |
+| 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | 🔨 IN PROGRESS | — |
 | 9 | `jira_handoff` — context-reset snapshot | ⬜ pending | — |
 | 10 | Clean break — delete 31 legacy Jira tools, rename create/update/assign/delete | ⬜ pending | — |
 | 11 | Confluence 12 → 4 | ⬜ pending | — |
@@ -39,6 +39,10 @@ Pre-task baseline commit: bcd78c0 (fixed pre-existing `test_create_issue` failur
 **Into Task 8 (vector rewrite):**
 - Decide error-surfacing policy in `semantic_search_impl`: empty-index returns soft `{"error","hint"}` JSON but embedder/store exceptions propagate as hard errors. Recommend: catch embed/store failures → actionable hint payloads. Test it.
 - Fix `has_more` off-by-one when `exclude_key` trims results (vector_tools.py pagination block).
+
+**Into Task 10 (clean break):**
+- Task 7 added inline read-only guards (`require_write_access`) on jira_agile/jira_versions write sub-actions. When deleting legacy create_sprint/update_sprint/create_version/batch_create_versions, confirm the deletions do NOT strip the new guarded paths in the v2 `agile`/`versions` tools. The new helper lives in `utils/decorators.py` (`require_write_access`, `_resolve_read_only`) — keep it.
+- Also confirm Task 7's plan amendment (read-only note in the plan's Task 7 section) is honored.
 
 **Into Task 12 (sweep/evals):**
 - Promote `ResponseFormatter._relative_timestamp` → public `relative_timestamp`; update the external use in jira.py (`_issue_card` latest_comments).
