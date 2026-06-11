@@ -113,10 +113,17 @@ async def semantic_search_impl(
             "hint": "Check OPENAI_API_KEY and that the index is synced (jira_vector_sync_status).",
         }
 
+    # Whether the excluded source was actually among the raw matches (it isn't
+    # always — it may be filtered by project or fall below min_score). Capture
+    # this BEFORE the trim below reassigns `results` and drops the source.
+    source_present = bool(exclude_key) and any(
+        r["issue_id"] == exclude_key for r in results
+    )
+
     if exclude_key:
         results = [r for r in results if r["issue_id"] != exclude_key][:limit]
 
-    effective_total = total_count - 1 if exclude_key else total_count
+    effective_total = total_count - 1 if source_present else total_count
 
     response: dict[str, Any] = {
         "total_matches": total_count,
@@ -255,7 +262,7 @@ async def knowledge(
         if stats["total_issues"] == 0:
             return json.dumps({
                 "error": "Vector index is empty. Run sync first.",
-                "hint": "Use CLI: mcp-atlassian-vector sync --full",
+                "hint": "uv run python -m mcp_atlassian.vector.cli sync --full",
             }, indent=2)
 
         # Parse the query using LLM

@@ -97,3 +97,24 @@ async def test_semantic_search_impl_exclude_key_no_spurious_has_more():
     assert [r["key"] for r in result["results"]] == ["DS-2"]
     # total_count=2, minus the excluded source =1 effective; 1 result returned → no has_more
     assert "pagination" not in result
+
+
+@pytest.mark.anyio
+async def test_semantic_search_impl_exclude_key_absent_keeps_has_more():
+    store = MagicMock()
+    store.get_stats.return_value = {"total_issues": 100}
+    rows = [
+        {"issue_id": f"DS-{i}", "summary": "s", "issue_type": "Bug",
+         "status": "Open", "project_key": "DS", "score": 0.9} for i in range(1, 5)
+    ]  # DS-1..DS-4, total_count=4; exclude_key DS-99 is NOT among them
+    store.hybrid_search.return_value = (rows, 4)
+    embedder = MagicMock(); embedder.embed = AsyncMock(return_value=[0.1] * 8)
+    config = MagicMock(); config.fts_weight = 0.3
+    with (
+        patch.object(vector_tools, "_get_store", return_value=store),
+        patch.object(vector_tools, "_get_embedder", return_value=embedder),
+        patch.object(vector_tools, "_get_config", return_value=config),
+    ):
+        result = await vector_tools.semantic_search_impl("s", limit=3, exclude_key="DS-99")
+    assert len(result["results"]) == 3
+    assert "pagination" in result  # 4 real matches, none excluded → page 2 exists
