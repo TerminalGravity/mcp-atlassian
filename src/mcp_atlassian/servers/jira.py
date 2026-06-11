@@ -1162,7 +1162,7 @@ def _handoff_line(raw: dict[str, Any]) -> dict[str, Any]:
         "key": c.get("key"),
         "status": c.get("status"),
         "priority": c.get("priority"),
-        "summary": (c.get("summary") or "")[:100],
+        "summary": (c.get("summary") or "")[:80],
         "updated": c.get("updated"),
     }
 
@@ -1183,8 +1183,8 @@ async def handoff(
     ] = 3,
     limit: Annotated[
         int,
-        Field(description="Max issues per section.", default=15, ge=1, le=30),
-    ] = 15,
+        Field(description="Max issues per section.", default=10, ge=1, le=30),
+    ] = 10,
 ) -> str:
     """Compact resumable state snapshot (~500 tokens) for context resets.
 
@@ -1197,6 +1197,9 @@ async def handoff(
     scope = ""
     project_list = _parse_csv(projects)
     if project_list:
+        for p in project_list:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,9}", p):
+                raise ValueError(f"Invalid project key: {p!r}")
         quoted = ", ".join(f'"{p}"' for p in project_list)
         scope = f" AND project in ({quoted})"
     fields = ["summary", "status", "priority", "updated"]
@@ -1213,18 +1216,24 @@ async def handoff(
         fields=fields,
         limit=limit,
     )
+    open_issues = [
+        _handoff_line(i.to_simplified_dict()) for i in open_result.issues
+    ]
+    recently_updated = [
+        _handoff_line(i.to_simplified_dict()) for i in recent_result.issues
+    ]
+    if not open_issues and not recently_updated:
+        note = "No open or recently-updated issues assigned to you — clean slate."
+    else:
+        note = (
+            "State snapshot for context reset — ingest and resume. "
+            "Use jira_get for any issue needing detail."
+        )
     return _json(
         {
-            "note": (
-                "State snapshot for context reset — ingest and resume. "
-                "Use jira_get for any issue needing detail."
-            ),
-            "open_issues": [
-                _handoff_line(i.to_simplified_dict()) for i in open_result.issues
-            ],
-            "recently_updated": [
-                _handoff_line(i.to_simplified_dict()) for i in recent_result.issues
-            ],
+            "note": note,
+            "open_issues": open_issues,
+            "recently_updated": recently_updated,
         }
     )
 

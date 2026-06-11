@@ -1994,3 +1994,36 @@ async def test_jira_handoff_project_scope(jira_client, mock_jira_fetcher):
     await jira_client.call_tool("jira_handoff", {"projects": "DS,AI"})
     first_jql = mock_jira_fetcher.search_issues.call_args_list[0].kwargs["jql"]
     assert 'project in ("DS", "AI")' in first_jql
+
+
+@pytest.mark.anyio
+async def test_jira_handoff_budget_is_real(jira_client, mock_jira_fetcher):
+    # Worst case: a full section of long-summary, long-status cards at the DEFAULT limit.
+    def big_result(jql, **kwargs):
+        n = kwargs.get("limit", 10)
+        issues = []
+        for i in range(n):
+            m = MagicMock()
+            m.to_simplified_dict.return_value = {
+                "key": f"DS-{10000+i}",
+                "summary": "X" * 200,  # longer than the cap; tool must truncate
+                "status": {"name": "Waiting for Customer Response"},
+                "priority": {"name": "Highest"},
+                "updated": "2026-06-10T10:00:00.000+0000",
+            }
+            issues.append(m)
+        r = MagicMock(); r.issues = issues
+        return r
+    mock_jira_fetcher.search_issues.side_effect = big_result
+    response = await jira_client.call_tool("jira_handoff", {})
+    text = response.content[0].text
+    assert len(text) < 8000  # default snapshot stays under budget even worst-case
+    # prove truncation actually happened (summary capped)
+    content = json.loads(text)
+    assert all(len(c["summary"]) <= 80 for c in content["open_issues"])
+
+
+@pytest.mark.anyio
+async def test_jira_handoff_rejects_bad_project_key(jira_client, mock_jira_fetcher):
+    with pytest.raises(Exception, match="Invalid project key"):
+        await jira_client.call_tool("jira_handoff", {"projects": 'DS") OR x'})
