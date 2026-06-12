@@ -5,7 +5,7 @@
 > Spec: `docs/superpowers/specs/2026-06-10-mcp-v2-tool-surface-design.md`
 > Plan: `docs/superpowers/plans/2026-06-10-mcp-v2-tool-surface.md` (13 tasks, full code per task)
 
-**Last updated:** 2026-06-11 (after Task 11 close — full v2 surface built, 20 tools; Task 12 next)
+**Last updated:** 2026-06-11 (Tasks 1–12 DONE; Task 13 dogfood blocked on user MCP reconnect)
 
 ## Where the work lives
 
@@ -29,8 +29,8 @@
 | 9 | `jira_handoff` — context-reset snapshot | ✅ DONE (spec ✅, quality ✅, real budget test) | 53b543c, 1662b49 |
 | 10 | Clean break — delete 37 legacy, rename create/update/assign/delete → 14 tools | ✅ DONE (spec ✅ all 9 checks, quality ✅, lint 319→21) | a2ad28e |
 | 11 | Confluence 12 → 4 (find/get/write/comment) | ✅ DONE (spec ✅, quality ✅, fallback log + truncation marker) | a7d96ee, d1cc759 |
-| 12 | Docs/skills sweep + budget evals | ⬜ pending | — |
-| 13 | Live dogfood pass (needs user to reconnect MCP) | ⬜ pending | — |
+| 12 | Docs/skills sweep + budget evals + coverage carry-overs | ✅ DONE (12a code + 12b docs, parallel; suite 1251 green) | 4e66226, 27caefd |
+| 13 | Live dogfood pass | ⏸ BLOCKED ON USER — needs MCP reconnect to load v2 surface | — |
 
 Pre-task baseline commit: bcd78c0 (fixed pre-existing `test_create_issue` failure — `return_mode="full"`).
 
