@@ -73,6 +73,14 @@ The worktree is isolated and unaffected, but at merge/finish time:
 
 NOTE for reviewers: this worktree lives at `.claude/worktrees/mcp-v2-surface`. ALWAYS run git/pytest from there. Running them in the main repo root (`/Users/jack/Developer/mcp-atlassian/`) shows `main`, which legitimately lacks the v2 work — that is NOT a revert (one reviewer tripped on this).
 
+## Final holistic review (post Task 12) — SHIP ✅
+
+Branch reviewed end-to-end for cross-cutting/integration concerns: 20 tools surface through the REAL mount path (main.py mounts jira_mcp+confluence_mcp); read/write tag partition clean (10/10, no unguarded write exposed in read-only mode — the critical check); jira_agile/jira_versions inline write-guards intact end-to-end; no dead/duplicate registration; imports clean; suite green (1255 passed). Verdict: **code ready to merge** (Task 13 live-dogfood still pending on user). `tests/unit/servers/test_v2_surface_smoke.py` now pins the assembled 20-tool surface (uses the non-src-prefixed import path = real assembly).
+
+**Post-merge polish (non-blocking, fold into the upload_attachment/account_id merge pass):**
+- `response_format` (jira_get: summary|full) vs `return_mode` (writes: summary|minimal|full) — divergent names + enum sets, both plain `str` not `Literal`. Either unify, or make both `Literal` + cross-reference in docstrings.
+- `success` key non-uniform across write envelopes: assign/delete/link have it; create_sprint/versions-create/worklog-add return `{"message":...}` without it. Add `success: True` for a uniform contract.
+
 ## Conventions locked in (apply to all remaining tasks)
 
 - **Readability rule (binding, in plan header):** flat fields over nested objects, display names over accountIds, relative timestamps ("2h ago"), no null/empty keys, no responses > ~2 KB unless `full` requested.
