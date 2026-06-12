@@ -5,7 +5,7 @@
 > Spec: `docs/superpowers/specs/2026-06-10-mcp-v2-tool-surface-design.md`
 > Plan: `docs/superpowers/plans/2026-06-10-mcp-v2-tool-surface.md` (13 tasks, full code per task)
 
-**Last updated:** 2026-06-11 (after Task 10 close — clean break done; Task 11 next)
+**Last updated:** 2026-06-11 (after Task 11 close — full v2 surface built, 20 tools; Task 12 next)
 
 ## Where the work lives
 
@@ -28,7 +28,7 @@
 | 8 | vector_tools rewrite — `jira_knowledge` + `jira_vector_sync_status`, delete 19 | ✅ DONE (spec ✅, quality ✅, 3021→334 lines) | 8a40423, 6e5136d |
 | 9 | `jira_handoff` — context-reset snapshot | ✅ DONE (spec ✅, quality ✅, real budget test) | 53b543c, 1662b49 |
 | 10 | Clean break — delete 37 legacy, rename create/update/assign/delete → 14 tools | ✅ DONE (spec ✅ all 9 checks, quality ✅, lint 319→21) | a2ad28e |
-| 11 | Confluence 12 → 4 | ⬜ pending | — |
+| 11 | Confluence 12 → 4 (find/get/write/comment) | ✅ DONE (spec ✅, quality ✅, fallback log + truncation marker) | a7d96ee, d1cc759 |
 | 12 | Docs/skills sweep + budget evals | ⬜ pending | — |
 | 13 | Live dogfood pass (needs user to reconnect MCP) | ⬜ pending | — |
 
