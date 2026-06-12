@@ -1379,3 +1379,153 @@ async def test_jira_handoff_budget_is_real(jira_client, mock_jira_fetcher):
 async def test_jira_handoff_rejects_bad_project_key(jira_client, mock_jira_fetcher):
     with pytest.raises(Exception, match="Invalid project key"):
         await jira_client.call_tool("jira_handoff", {"projects": 'DS") OR x'})
+
+
+# === v2 token-budget evals (miner friction patterns) ===
+# These pin the consolidation's measured wins. Each maps to a friction
+# pattern from the 1,624-transcript corpus analysis.
+
+
+@pytest.mark.anyio
+async def test_eval_triage_sweep_is_one_call(jira_client, mock_jira_fetcher):
+    """C1/C4: inspect 8 issues in ONE jira_get call, not 8 search→get round-trips."""
+    response = await jira_client.call_tool(
+        "jira_get", {"keys": ",".join(f"TEST-{i}" for i in range(1, 9))}
+    )
+    content = json.loads(response.content[0].text)
+    assert len(content) == 8  # 8 issues, one MCP call
+    assert mock_jira_fetcher.get_issue.call_count == 8  # server-side fan-out, not agent-side
+
+
+@pytest.mark.anyio
+async def test_eval_transition_five_by_name_zero_lookups(jira_client, mock_jira_fetcher):
+    """C3: transition 5 issues by status NAME — no get_transitions tool exists at all."""
+    mock_jira_fetcher.get_available_transitions.return_value = [
+        {"id": "41", "name": "Done", "to_status": "Done"}
+    ]
+    await jira_client.call_tool(
+        "jira_transition",
+        {"keys": "T-1,T-2,T-3,T-4,T-5", "to_status": "Done"},
+    )
+    assert mock_jira_fetcher.transition_issue.call_count == 5
+
+
+def test_eval_no_transition_lookup_tool_exists():
+    """C3: the 103 get_transitions round-trips are structurally impossible — no such tool."""
+    import asyncio
+
+    from src.mcp_atlassian.servers.jira import jira_mcp
+
+    tools = asyncio.run(jira_mcp.get_tools())
+    tool_names = set(tools.keys())
+    assert "get_transitions" not in tool_names
+    assert "transition" in tool_names  # the merged replacement
+
+
+@pytest.mark.anyio
+async def test_eval_comment_one_call_with_preview(jira_client, mock_jira_fetcher):
+    """C2: post a comment and verify rendering from body_preview — no follow-up get."""
+    mock_jira_fetcher.add_comment.return_value = {
+        "id": "1",
+        "body": "stored",
+        "created": "2026-06-10T10:00:00.000+0000",
+    }
+    response = await jira_client.call_tool(
+        "jira_comment", {"issue_key": "T-1", "body": "stored"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["body_preview"] == "stored"  # rendering verifiable in-band
+    assert mock_jira_fetcher.add_comment.call_count == 1
+    assert mock_jira_fetcher.get_issue.call_count == 0  # NO verification re-fetch
+
+
+# === Part 2 — server-layer tests for jira_update / jira_assign / jira_delete ===
+
+
+@pytest.mark.anyio
+async def test_jira_update_calls_update_issue(jira_client, mock_jira_fetcher):
+    """jira_update routes through the fetcher's update_issue method."""
+    mock_issue = MagicMock()
+    mock_issue.to_simplified_dict.return_value = {
+        "key": "TEST-999",
+        "summary": "Updated summary",
+        "status": {"name": "In Progress"},
+    }
+    mock_jira_fetcher.update_issue.return_value = mock_issue
+
+    response = await jira_client.call_tool(
+        "jira_update",
+        {
+            "issue_key": "TEST-999",
+            "fields": {"summary": "Updated summary"},
+        },
+    )
+    content = json.loads(response.content[0].text)
+    assert content["message"] == "Issue updated successfully"
+    assert content["key"] == "TEST-999"
+    mock_jira_fetcher.update_issue.assert_called_once_with(
+        issue_key="TEST-999", summary="Updated summary"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_assign_calls_assign_issue(jira_client, mock_jira_fetcher):
+    """jira_assign routes through the fetcher's assign_issue method."""
+    mock_jira_fetcher.assign_issue.return_value = ("Jack Felke", "Stan Ulmasov")
+
+    response = await jira_client.call_tool(
+        "jira_assign",
+        {"issue_key": "TEST-100", "assignee": "stan@example.com"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["key"] == "TEST-100"
+    assert content["prior_assignee"] == "Jack Felke"
+    assert content["new_assignee"] == "Stan Ulmasov"
+    mock_jira_fetcher.assign_issue.assert_called_once_with("TEST-100", "stan@example.com")
+
+
+@pytest.mark.anyio
+async def test_jira_delete_calls_delete_issue(jira_client, mock_jira_fetcher):
+    """jira_delete routes through the fetcher's delete_issue method."""
+    mock_jira_fetcher.delete_issue.return_value = True
+
+    response = await jira_client.call_tool(
+        "jira_delete", {"issue_key": "TEST-777"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert "deleted" in content["message"].lower()
+    mock_jira_fetcher.delete_issue.assert_called_once_with("TEST-777")
+
+
+# === Part 3 — jira_projects filter/error-path coverage ===
+
+
+@pytest.mark.anyio
+async def test_jira_projects_include_archived_passes_through(
+    jira_client, mock_jira_fetcher
+):
+    """include_archived=True must reach get_all_projects with the flag set."""
+    response = await jira_client.call_tool(
+        "jira_projects", {"include_archived": True}
+    )
+    content = json.loads(response.content[0].text)
+    assert "projects" in content
+    project_keys = [p["key"] for p in content["projects"]]
+    assert "ARCHIVED" in project_keys
+    mock_jira_fetcher.get_all_projects.assert_called_with(include_archived=True)
+
+
+@pytest.mark.anyio
+async def test_jira_projects_user_lookup_error_returns_failure(
+    jira_client, mock_jira_fetcher
+):
+    """A user-lookup exception must return success=False, not raise."""
+    response = await jira_client.call_tool(
+        "jira_projects", {"user": "nonexistent@example.com"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is False
+    assert "error" in content
+    assert content["user_identifier"] == "nonexistent@example.com"

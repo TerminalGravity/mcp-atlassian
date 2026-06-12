@@ -85,7 +85,7 @@ class ResponseFormatter:
             "status": cls._flatten_named_object(issue.get("status")),
             "priority": cls._flatten_named_object(issue.get("priority")),
             "assignee": cls._flatten_user(issue.get("assignee")),
-            "updated": cls._relative_timestamp(issue.get("updated")),
+            "updated": cls.relative_timestamp(issue.get("updated")),
         }
 
         # Optional fields
@@ -104,7 +104,7 @@ class ResponseFormatter:
             compressed["labels"] = issue["labels"]
 
         if issue.get("created"):
-            compressed["created"] = cls._relative_timestamp(issue["created"])
+            compressed["created"] = cls.relative_timestamp(issue["created"])
 
         if include_comments and issue.get("comments"):
             compressed["comments_count"] = len(issue["comments"])
@@ -178,8 +178,8 @@ class ResponseFormatter:
                 "id": sprint.get("id"),
                 "name": sprint.get("name"),
                 "state": sprint.get("state"),
-                "start_date": cls._relative_timestamp(sprint.get("start_date")),
-                "end_date": cls._relative_timestamp(sprint.get("end_date")),
+                "start_date": cls.relative_timestamp(sprint.get("start_date")),
+                "end_date": cls.relative_timestamp(sprint.get("end_date")),
             }
             for sprint in sprints
         ]
@@ -234,7 +234,7 @@ class ResponseFormatter:
         return user.get("display_name") or user.get("name")
 
     @classmethod
-    def _relative_timestamp(cls, timestamp: str | None) -> str | None:
+    def relative_timestamp(cls, timestamp: str | None) -> str | None:
         """
         Convert ISO timestamp to human-readable relative time.
 

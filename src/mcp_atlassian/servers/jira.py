@@ -172,7 +172,10 @@ def _find_transition(
         if str(transition.get("to_status", "")).casefold() == target:
             return transition
         to_data = transition.get("to")
-        if isinstance(to_data, dict) and str(to_data.get("name", "")).casefold() == target:
+        if (
+            isinstance(to_data, dict)
+            and str(to_data.get("name", "")).casefold() == target
+        ):
             return transition
     for transition in transitions:
         if str(transition.get("name", "")).casefold() == target:
@@ -180,9 +183,7 @@ def _find_transition(
     return None
 
 
-def _resolve_transition_id(
-    jira: Any, issue_key: str, status_name: str
-) -> str:
+def _resolve_transition_id(jira: Any, issue_key: str, status_name: str) -> str:
     """Map a human-readable status/transition name to its transition id."""
     transitions = jira.get_available_transitions(issue_key)
     match = _find_transition(transitions, status_name)
@@ -211,9 +212,7 @@ def _next_transitions(jira: Any, issue_key: str) -> list[dict[str, Any]]:
         return []
 
 
-def _find_recent_duplicate(
-    jira: Any, project_key: str, summary: str
-) -> str | None:
+def _find_recent_duplicate(jira: Any, project_key: str, summary: str) -> str | None:
     """Key of an issue with the same summary created in the project within
     the last 10 minutes, else None. Fails open: a guard error never blocks
     creation. Summary comparison is exact (casefolded) client-side — the
@@ -229,9 +228,7 @@ def _find_recent_duplicate(
         for issue in result.issues:
             raw = issue.to_simplified_dict()
             candidate = str(
-                raw.get("summary")
-                or (raw.get("fields") or {}).get("summary")
-                or ""
+                raw.get("summary") or (raw.get("fields") or {}).get("summary") or ""
             )
             if candidate.strip().casefold() == target:
                 return raw.get("key")
@@ -289,7 +286,7 @@ def _issue_card(
                     if isinstance(c.get("author"), dict)
                     else c.get("author")
                 ),
-                "created": ResponseFormatter._relative_timestamp(c.get("created")),
+                "created": ResponseFormatter.relative_timestamp(c.get("created")),
                 "body": _truncate_tagged(str(c.get("body") or ""), 200),
             }
             for c in comments[-2:]
@@ -341,7 +338,12 @@ async def get(
     ] = ",".join(DEFAULT_READ_JIRA_FIELDS),
     comment_limit: Annotated[
         int,
-        Field(description="Max comments fetched per issue (0 = none)", default=10, ge=0, le=100),
+        Field(
+            description="Max comments fetched per issue (0 = none)",
+            default=10,
+            ge=0,
+            le=100,
+        ),
     ] = 10,
     include: Annotated[
         str | None,
@@ -397,9 +399,7 @@ async def get(
                 jira,
                 issue,
                 response_format=response_format,
-                extras_from_raw=(
-                    ("changelogs",) if "changelog" in includes else ()
-                ),
+                extras_from_raw=(("changelogs",) if "changelog" in includes else ()),
             )
             if "dates" in includes:
                 try:
@@ -497,7 +497,10 @@ async def find(
     ] = 0,
     projects_filter: Annotated[
         str | None,
-        Field(description="(Optional) Comma-separated project keys to restrict results.", default=None),
+        Field(
+            description="(Optional) Comma-separated project keys to restrict results.",
+            default=None,
+        ),
     ] = None,
 ) -> str:
     """Find Jira issues — the ONLY search tool. JQL, semantic, or similar-to.
@@ -574,7 +577,9 @@ async def transition(
     ctx: Context,
     keys: Annotated[
         str,
-        Field(description="One issue key or comma-separated keys to move to the same status."),
+        Field(
+            description="One issue key or comma-separated keys to move to the same status."
+        ),
     ],
     to_status: Annotated[
         str | None,
@@ -590,7 +595,9 @@ async def transition(
     ] = None,
     transition_id: Annotated[
         str | None,
-        Field(description="(Optional) Raw transition id; prefer to_status.", default=None),
+        Field(
+            description="(Optional) Raw transition id; prefer to_status.", default=None
+        ),
     ] = None,
     fields: Annotated[
         dict[str, Any] | None,
@@ -601,11 +608,17 @@ async def transition(
     ] = None,
     comment: Annotated[
         str | None,
-        Field(description="(Optional) Comment added to each transitioned issue.", default=None),
+        Field(
+            description="(Optional) Comment added to each transitioned issue.",
+            default=None,
+        ),
     ] = None,
     return_mode: Annotated[
         Literal["summary", "minimal", "full"],
-        Field(description="'summary' (default), 'minimal', or 'full'. Single-key only.", default="summary"),
+        Field(
+            description="'summary' (default), 'minimal', or 'full'. Single-key only.",
+            default="summary",
+        ),
     ] = "summary",
 ) -> str:
     """Move one or many Jira issues to a new status by NAME.
@@ -821,11 +834,17 @@ async def link(
     ] = None,
     title: Annotated[
         str | None,
-        Field(description="(Optional, web links) Display title; defaults to the URL.", default=None),
+        Field(
+            description="(Optional, web links) Display title; defaults to the URL.",
+            default=None,
+        ),
     ] = None,
     remove: Annotated[
         bool,
-        Field(description="Remove a link instead of creating one (requires link_id).", default=False),
+        Field(
+            description="Remove a link instead of creating one (requires link_id).",
+            default=False,
+        ),
     ] = False,
     link_id: Annotated[
         str | None,
@@ -953,13 +972,17 @@ async def worklog(
     ] = None,
     started: Annotated[
         str | None,
-        Field(description="(Optional, add) ISO start time; defaults to now.", default=None),
+        Field(
+            description="(Optional, add) ISO start time; defaults to now.", default=None
+        ),
     ] = None,
     original_estimate: Annotated[
-        str | None, Field(description="(Optional, add) New original estimate.", default=None)
+        str | None,
+        Field(description="(Optional, add) New original estimate.", default=None),
     ] = None,
     remaining_estimate: Annotated[
-        str | None, Field(description="(Optional, add) New remaining estimate.", default=None)
+        str | None,
+        Field(description="(Optional, add) New remaining estimate.", default=None),
     ] = None,
 ) -> str:
     """Read worklogs (no time_spent) or add one (time_spent given).
@@ -978,7 +1001,9 @@ async def worklog(
         original_estimate=original_estimate,
         remaining_estimate=remaining_estimate,
     )
-    return _json({"message": "Worklog added successfully", "key": issue_key, "worklog": result})
+    return _json(
+        {"message": "Worklog added successfully", "key": issue_key, "worklog": result}
+    )
 
 
 @jira_mcp.tool(
@@ -998,18 +1023,52 @@ async def agile(
             )
         ),
     ],
-    board_id: Annotated[str | None, Field(description="Board id (sprints / create_sprint).", default=None)] = None,
-    sprint_id: Annotated[str | None, Field(description="Sprint id (sprint_issues / update_sprint).", default=None)] = None,
-    project_key: Annotated[str | None, Field(description="(boards) Filter by project.", default=None)] = None,
-    board_name: Annotated[str | None, Field(description="(boards) Fuzzy name filter.", default=None)] = None,
-    board_type: Annotated[str | None, Field(description="(boards) 'scrum' or 'kanban'.", default=None)] = None,
-    state: Annotated[str | None, Field(description="(sprints) 'active'|'future'|'closed'; (update_sprint) new state.", default=None)] = None,
-    sprint_name: Annotated[str | None, Field(description="(create/update_sprint) Sprint name.", default=None)] = None,
-    start_date: Annotated[str | None, Field(description="(create/update_sprint) ISO 8601 start.", default=None)] = None,
-    end_date: Annotated[str | None, Field(description="(create/update_sprint) ISO 8601 end.", default=None)] = None,
-    goal: Annotated[str | None, Field(description="(create/update_sprint) Sprint goal.", default=None)] = None,
-    limit: Annotated[int, Field(description="Max results (1-50)", default=10, ge=1, le=50)] = 10,
-    start_at: Annotated[int, Field(description="Pagination offset", default=0, ge=0)] = 0,
+    board_id: Annotated[
+        str | None,
+        Field(description="Board id (sprints / create_sprint).", default=None),
+    ] = None,
+    sprint_id: Annotated[
+        str | None,
+        Field(description="Sprint id (sprint_issues / update_sprint).", default=None),
+    ] = None,
+    project_key: Annotated[
+        str | None, Field(description="(boards) Filter by project.", default=None)
+    ] = None,
+    board_name: Annotated[
+        str | None, Field(description="(boards) Fuzzy name filter.", default=None)
+    ] = None,
+    board_type: Annotated[
+        str | None, Field(description="(boards) 'scrum' or 'kanban'.", default=None)
+    ] = None,
+    state: Annotated[
+        str | None,
+        Field(
+            description="(sprints) 'active'|'future'|'closed'; (update_sprint) new state.",
+            default=None,
+        ),
+    ] = None,
+    sprint_name: Annotated[
+        str | None,
+        Field(description="(create/update_sprint) Sprint name.", default=None),
+    ] = None,
+    start_date: Annotated[
+        str | None,
+        Field(description="(create/update_sprint) ISO 8601 start.", default=None),
+    ] = None,
+    end_date: Annotated[
+        str | None,
+        Field(description="(create/update_sprint) ISO 8601 end.", default=None),
+    ] = None,
+    goal: Annotated[
+        str | None,
+        Field(description="(create/update_sprint) Sprint goal.", default=None),
+    ] = None,
+    limit: Annotated[
+        int, Field(description="Max results (1-50)", default=10, ge=1, le=50)
+    ] = 10,
+    start_at: Annotated[
+        int, Field(description="Pagination offset", default=0, ge=0)
+    ] = 0,
 ) -> str:
     """Boards and sprints, one tool. Replaces get_agile_boards /
     get_sprints_from_board / get_sprint_issues / create_sprint / update_sprint /
@@ -1026,9 +1085,11 @@ async def agile(
             limit=limit,
         )
         return _json(
-            {"boards": ResponseFormatter.compress_boards(
-                [b.to_simplified_dict() for b in boards]
-            )}
+            {
+                "boards": ResponseFormatter.compress_boards(
+                    [b.to_simplified_dict() for b in boards]
+                )
+            }
         )
 
     if action == "sprints":
@@ -1038,9 +1099,11 @@ async def agile(
             board_id=board_id, state=state, start=start_at, limit=limit
         )
         return _json(
-            {"sprints": ResponseFormatter.compress_sprints(
-                [s.to_simplified_dict() for s in sprints]
-            )}
+            {
+                "sprints": ResponseFormatter.compress_sprints(
+                    [s.to_simplified_dict() for s in sprints]
+                )
+            }
         )
 
     if action == "sprint_issues":
@@ -1067,7 +1130,9 @@ async def agile(
             end_date=end_date,
             goal=goal,
         )
-        return _json({"message": "Sprint created", "sprint": sprint.to_simplified_dict()})
+        return _json(
+            {"message": "Sprint created", "sprint": sprint.to_simplified_dict()}
+        )
 
     # update_sprint
     require_write_access(ctx, "update sprint")
@@ -1095,11 +1160,20 @@ async def versions(
     project_key: Annotated[str, Field(description="Jira project key (e.g., 'PROJ')")],
     name: Annotated[
         str | None,
-        Field(description="(Optional) Provide to CREATE a version with this name; omit to list.", default=None),
+        Field(
+            description="(Optional) Provide to CREATE a version with this name; omit to list.",
+            default=None,
+        ),
     ] = None,
-    start_date: Annotated[str | None, Field(description="(create) Start date YYYY-MM-DD.", default=None)] = None,
-    release_date: Annotated[str | None, Field(description="(create) Release date YYYY-MM-DD.", default=None)] = None,
-    description: Annotated[str | None, Field(description="(create) Version description.", default=None)] = None,
+    start_date: Annotated[
+        str | None, Field(description="(create) Start date YYYY-MM-DD.", default=None)
+    ] = None,
+    release_date: Annotated[
+        str | None, Field(description="(create) Release date YYYY-MM-DD.", default=None)
+    ] = None,
+    description: Annotated[
+        str | None, Field(description="(create) Version description.", default=None)
+    ] = None,
 ) -> str:
     """List a project's fix versions, or create one (name given).
 
@@ -1107,7 +1181,9 @@ async def versions(
     """
     jira = await get_jira_fetcher(ctx)
     if name is None:
-        return _json({"project": project_key, "versions": jira.get_project_versions(project_key)})
+        return _json(
+            {"project": project_key, "versions": jira.get_project_versions(project_key)}
+        )
     require_write_access(ctx, "create version")
     version = jira.create_project_version(
         project_key=project_key,
@@ -1127,14 +1203,24 @@ async def projects(
     ctx: Context,
     field_keyword: Annotated[
         str | None,
-        Field(description="(Optional) Fuzzy-search Jira field definitions instead of listing projects.", default=None),
+        Field(
+            description="(Optional) Fuzzy-search Jira field definitions instead of listing projects.",
+            default=None,
+        ),
     ] = None,
     user: Annotated[
         str | None,
-        Field(description="(Optional) Look up a user (email / name / accountId) instead of listing projects.", default=None),
+        Field(
+            description="(Optional) Look up a user (email / name / accountId) instead of listing projects.",
+            default=None,
+        ),
     ] = None,
-    include_archived: Annotated[bool, Field(description="Include archived projects.", default=False)] = False,
-    limit: Annotated[int, Field(description="Max results", default=20, ge=1, le=100)] = 20,
+    include_archived: Annotated[
+        bool, Field(description="Include archived projects.", default=False)
+    ] = False,
+    limit: Annotated[
+        int, Field(description="Max results", default=20, ge=1, le=100)
+    ] = 20,
 ) -> str:
     """Workspace discovery: project list (default), field schema search
     (field_keyword), or user lookup (user).
@@ -1151,7 +1237,9 @@ async def projects(
     if field_keyword is not None:
         return _json({"fields": jira.search_fields(field_keyword, limit=limit)})
     all_projects = jira.get_all_projects(include_archived=include_archived)
-    return _json({"projects": ResponseFormatter.compress_projects(all_projects)[:limit]})
+    return _json(
+        {"projects": ResponseFormatter.compress_projects(all_projects)[:limit]}
+    )
 
 
 def _handoff_line(raw: dict[str, Any]) -> dict[str, Any]:
@@ -1173,11 +1261,19 @@ async def handoff(
     ctx: Context,
     projects: Annotated[
         str | None,
-        Field(description="(Optional) Comma-separated project keys to scope the snapshot.", default=None),
+        Field(
+            description="(Optional) Comma-separated project keys to scope the snapshot.",
+            default=None,
+        ),
     ] = None,
     days: Annotated[
         int,
-        Field(description="Recency window for 'recently updated' (days).", default=3, ge=1, le=30),
+        Field(
+            description="Recency window for 'recently updated' (days).",
+            default=3,
+            ge=1,
+            le=30,
+        ),
     ] = 3,
     limit: Annotated[
         int,
@@ -1214,9 +1310,7 @@ async def handoff(
         fields=fields,
         limit=limit,
     )
-    open_issues = [
-        _handoff_line(i.to_simplified_dict()) for i in open_result.issues
-    ]
+    open_issues = [_handoff_line(i.to_simplified_dict()) for i in open_result.issues]
     recently_updated = [
         _handoff_line(i.to_simplified_dict()) for i in recent_result.issues
     ]
@@ -1234,40 +1328,6 @@ async def handoff(
             "recently_updated": recently_updated,
         }
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @jira_mcp.tool(
@@ -1461,10 +1521,6 @@ async def create(
     )
 
 
-
-
-
-
 @jira_mcp.tool(
     tags={"jira", "write"},
     annotations={"title": "Update Issue", "destructiveHint": True},
@@ -1613,9 +1669,7 @@ async def update(
 @check_write_access
 async def assign(
     ctx: Context,
-    issue_key: Annotated[
-        str, Field(description="Jira issue key (e.g., 'PROJ-123')")
-    ],
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
     assignee: Annotated[
         str,
         Field(
@@ -1672,9 +1726,7 @@ async def assign(
             f"Error assigning issue {issue_key} to '{assignee}': {str(e)}",
             exc_info=True,
         )
-        raise ValueError(
-            f"Failed to assign issue {issue_key}: {str(e)}"
-        ) from e
+        raise ValueError(f"Failed to assign issue {issue_key}: {str(e)}") from e
 
     result = {
         "success": True,
@@ -1709,46 +1761,13 @@ async def delete(
         ValueError: If in read-only mode or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
-    deleted = jira.delete_issue(issue_key)
-    result = {"message": f"Issue {issue_key} has been deleted successfully."}
+    success = jira.delete_issue(issue_key)
+    result = {
+        "success": success,
+        "message": f"Issue {issue_key} has been deleted successfully.",
+    }
     # The underlying method raises on failure, so if we reach here, it's success.
     return json.dumps(result, indent=2, ensure_ascii=False)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Import vector tools to register them on jira_mcp
