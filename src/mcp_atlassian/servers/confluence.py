@@ -71,7 +71,8 @@ async def find(
         try:
             query = f'siteSearch ~ "{original}"'
             pages = confluence_fetcher.search(query, limit=limit, spaces_filter=spaces)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"siteSearch failed ('{e}'), falling back to text search.")
             query = f'text ~ "{original}"'
             pages = confluence_fetcher.search(query, limit=limit, spaces_filter=spaces)
     else:
@@ -159,6 +160,8 @@ async def get(
             include_folders=True,
         )
         result["children"] = [c.to_simplified_dict() for c in children]
+        if len(children) >= 25:
+            result["children_truncated"] = "Showing first 25 children; more exist."
     if "comments" in includes:
         result["comments"] = [
             c.to_simplified_dict()
