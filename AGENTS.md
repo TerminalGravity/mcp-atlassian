@@ -36,7 +36,7 @@ uv run pytest                        # run full test suite
 
 ## Core MCP patterns
 
-**Tool naming**: `{service}_{action}` (e.g., `jira_create_issue`)
+**Tool naming**: `{service}_{action}` (e.g., `jira_create`, `jira_find`, `confluence_write`)
 
 **Architecture**:
 - **Mixins**: Functionality split into focused mixins extending base clients

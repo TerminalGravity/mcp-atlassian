@@ -5,69 +5,72 @@ description: "All available MCP Atlassian tools for Jira and Confluence"
 
 # Tools Reference
 
-MCP Atlassian provides tools for interacting with Jira and Confluence.
+MCP Atlassian provides 20 tools for interacting with Jira and Confluence.
 
-## Key Tools
+## Quick Overview
 
 <CardGroup cols={2}>
   <Card title="Jira Tools" icon="list-check">
     | Tool | Description |
     |------|-------------|
-    | `jira_get_issue` | Get details of a specific issue |
-    | `jira_search` | Search issues using JQL |
-    | `jira_create_issue` | Create a new issue |
-    | `jira_update_issue` | Update an existing issue |
-    | `jira_transition_issue` | Transition issue to new status |
-    | `jira_add_comment` | Add a comment to an issue |
+    | `jira_get` | Fetch one or many issues by key(s) |
+    | `jira_find` | Search by JQL or natural language |
+    | `jira_create` | Create a new issue (duplicate-guarded) |
+    | `jira_update` | Modify fields on an existing issue |
+    | `jira_transition` | Move issue(s) to a status by name |
+    | `jira_comment` | Add or edit a comment |
   </Card>
   <Card title="Confluence Tools" icon="book">
     | Tool | Description |
     |------|-------------|
-    | `confluence_search` | Search content using CQL |
-    | `confluence_get_page` | Get content of a specific page |
-    | `confluence_create_page` | Create a new page |
-    | `confluence_update_page` | Update an existing page |
+    | `confluence_find` | Search content or look up users |
+    | `confluence_get` | Get a page with optional children/comments |
+    | `confluence_write` | Create, update, or delete a page |
+    | `confluence_comment` | Add a comment to a page |
   </Card>
 </CardGroup>
 
 ## Complete Tool List
 
-| Operation | Jira Tools | Confluence Tools |
-|-----------|------------|------------------|
-| **Read** | `jira_search` | `confluence_search` |
-| | `jira_get_issue` | `confluence_get_page` |
-| | `jira_get_all_projects` | `confluence_get_page_children` |
-| | `jira_get_project_issues` | `confluence_get_comments` |
-| | `jira_get_worklog` | `confluence_get_labels` |
-| | `jira_get_transitions` | `confluence_search_user` |
-| | `jira_search_fields` | |
-| | `jira_get_agile_boards` | |
-| | `jira_get_board_issues` | |
-| | `jira_get_sprints_from_board` | |
-| | `jira_get_sprint_issues` | |
-| | `jira_get_issue_link_types` | |
-| | `jira_batch_get_changelogs`* | |
-| | `jira_get_user_profile` | |
-| | `jira_download_attachments` | |
-| | `jira_get_project_versions` | |
-| **Write** | `jira_create_issue` | `confluence_create_page` |
-| | `jira_update_issue` | `confluence_update_page` |
-| | `jira_delete_issue` | `confluence_delete_page` |
-| | `jira_batch_create_issues` | `confluence_add_label` |
-| | `jira_add_comment` | `confluence_add_comment` |
-| | `jira_transition_issue` | |
-| | `jira_add_worklog` | |
-| | `jira_link_to_epic` | |
-| | `jira_create_sprint` | |
-| | `jira_update_sprint` | |
-| | `jira_create_issue_link` | |
-| | `jira_remove_issue_link` | |
-| | `jira_create_version` | |
-| | `jira_batch_create_versions` | |
+### Jira — Read
 
-<Note>
-\* `jira_batch_get_changelogs` is only available on Jira Cloud
-</Note>
+| Tool | Key Parameters | Description |
+|------|---------------|-------------|
+| `jira_get` | `keys` (str or list), `response_format` (summary\|full), `include_changelog`, `include_dates`, `include_sla` | Fetch one or many issues. Use `summary` format for lists; `full` for deep inspection. |
+| `jira_find` | `jql` or `query` (natural language), `similar_to` (issue key), `limit`, `fields` | Unified search: JQL, natural-language, or similarity-to-a-key. |
+| `jira_projects` | `action` (list\|fields\|user), `keyword`, `query` | List all projects, search field schemas by keyword, or look up a user account. |
+| `jira_agile` | `action` (boards\|sprints\|sprint_issues\|create_sprint\|update_sprint), `board_id`, `sprint_id` | Boards, sprints, and sprint management in one tool. |
+| `jira_handoff` | `keys` (optional list) | Returns a compact, resumable state snapshot — useful before context resets. |
+| `jira_worklog` | `key`, `action` (get\|add), `time_spent`, `comment` | Read worklogs on an issue or log time spent. |
+
+### Jira — Knowledge
+
+| Tool | Key Parameters | Description |
+|------|---------------|-------------|
+| `jira_knowledge` | `query` (natural language), `project`, `limit` | Natural-language Q&A over the synced LanceDB vector index. |
+| `jira_vector_sync_status` | — | Reports sync state, last sync time, and indexed issue counts per project. |
+
+### Jira — Write
+
+| Tool | Key Parameters | Description |
+|------|---------------|-------------|
+| `jira_create` | `project`, `summary`, `issuetype`, `description`, `fields` | Create a new issue. Runs duplicate detection before creating. |
+| `jira_update` | `key`, `fields` | Update any field(s) on an existing issue. |
+| `jira_assign` | `key`, `assignee` (account ID, email, or `null`) | Assign or unassign an issue. |
+| `jira_delete` | `key` | Delete an issue permanently. |
+| `jira_transition` | `keys` (one or list), `status` (name), `comment` | Move one or many issues to a status by name. Resolves transition IDs automatically. |
+| `jira_comment` | `key`, `body`, `comment_id` (for edit), `body_format` | Add or edit a comment. Response includes a stored-body preview — no follow-up fetch needed. |
+| `jira_link` | `action` (add_epic\|remove_epic\|add_web\|add_issue\|remove_issue), `key`, `target`, `url`, `link_type` | Manage epic links, web links, and issue-to-issue links in one tool. |
+| `jira_versions` | `action` (list\|create), `project`, `name`, `release_date`, `description` | List fix versions for a project or create a new version. |
+
+### Confluence
+
+| Tool | Key Parameters | Description |
+|------|---------------|-------------|
+| `confluence_find` | `query` or `cql`, `space_key`, `content_type`, `limit` | Search pages/blog posts by CQL or natural language; also looks up users. |
+| `confluence_get` | `page_id` or `title`+`space_key`, `include_children`, `include_comments`, `include_labels` | Get a page's content plus optional metadata. |
+| `confluence_write` | `action` (create\|update\|delete), `space_key`, `title`, `body`, `page_id`, `labels` | Create, update, or delete a page. Manage labels in the same call. |
+| `confluence_comment` | `page_id`, `body` | Add a comment to a Confluence page. |
 
 ## Tool Access Control
 
@@ -77,10 +80,10 @@ Use `ENABLED_TOOLS` environment variable or `--enabled-tools` flag:
 
 ```bash
 # Environment variable
-ENABLED_TOOLS="confluence_search,jira_get_issue,jira_search"
+ENABLED_TOOLS="confluence_find,jira_get,jira_find"
 
 # Command line
-uvx mcp-atlassian --enabled-tools "confluence_search,jira_get_issue,jira_search"
+uvx mcp-atlassian --enabled-tools "confluence_find,jira_get,jira_find"
 ```
 
 ### Read-Only Mode

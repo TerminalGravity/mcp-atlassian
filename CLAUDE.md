@@ -34,21 +34,33 @@ This MCP server provides semantic search and direct Jira access. Use it to:
 
 ## MCP Tools Available
 
-### Search Tools
-- `jira_search` - JQL-based search with full Jira query syntax
-- `jira_get_issue` - Get detailed issue with comments and history
-- `jira_get_project_issues` - List issues for a project
+### Read Tools
+- `jira_get` - Get one or many issues by key(s); `response_format` summary|full; optionally include changelog, dates, SLA
+- `jira_find` - Search via JQL or natural language; `similar_to=KEY` for related-issue discovery
+- `jira_projects` - List projects, search fields by keyword, or look up users
+- `jira_agile` - Boards, sprints, sprint issues, create/update sprints (`action=boards|sprints|sprint_issues|create_sprint|update_sprint`)
+- `jira_handoff` - Compact resumable state snapshot for context resets
+- `jira_worklog` - Read or add worklogs on an issue
+
+### Knowledge Tools
+- `jira_knowledge` - Natural-language Q&A over the synced vector index
+- `jira_vector_sync_status` - Check sync state and indexed issue counts
 
 ### Write Tools (use carefully)
-- `jira_create_issue` - Create new issues
-- `jira_update_issue` - Modify existing issues
-- `jira_add_comment` - Add comments to issues
-- `jira_transition_issue` - Move issues through workflow
+- `jira_create` - Create a new issue (duplicate-guarded)
+- `jira_update` - Modify fields on an existing issue
+- `jira_assign` - Assign or unassign an issue
+- `jira_delete` - Delete an issue
+- `jira_transition` - Move one or many issues to a status by name
+- `jira_comment` - Add or edit a comment; response includes a stored-body preview so no verification fetch is needed
+- `jira_link` - Manage epic links, web links, and issue links (add or remove)
+- `jira_versions` - List or create fix versions
 
-### Sprint/Board Tools
-- `jira_get_agile_boards` - List scrum/kanban boards
-- `jira_get_sprints_from_board` - Get sprint information
-- `jira_get_sprint_issues` - Issues in a specific sprint
+### Confluence Tools
+- `confluence_find` - Search content or look up users (CQL or natural language)
+- `confluence_get` - Get a page; optionally include children, comments, or labels
+- `confluence_write` - Create, update, or delete a page; manage labels
+- `confluence_comment` - Add a comment to a page
 
 ---
 
@@ -103,7 +115,7 @@ Find potential duplicate issues.
 
 ## JQL Quick Reference
 
-Common JQL patterns for ADR:
+Common JQL patterns for ADR. Run these through `jira_find` with a `jql` parameter:
 
 ```jql
 # My open issues

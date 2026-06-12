@@ -136,7 +136,7 @@ This guide covers IDE integration, environment variables, and advanced configura
 |----------|-------------|---------|
 | `JIRA_PROJECTS_FILTER` | Limit to specific Jira projects | `PROJ,DEV,SUPPORT` |
 | `CONFLUENCE_SPACES_FILTER` | Limit to specific Confluence spaces | `DEV,TEAM,DOC` |
-| `ENABLED_TOOLS` | Enable only specific tools | `confluence_search,jira_get_issue` |
+| `ENABLED_TOOLS` | Enable only specific tools | `confluence_find,jira_get` |
 
 ### Server Options
 
@@ -194,7 +194,7 @@ Control which tools are available:
 
 ```bash
 # Enable specific tools
-ENABLED_TOOLS="confluence_search,jira_get_issue,jira_search"
+ENABLED_TOOLS="confluence_find,jira_get,jira_find"
 
 # Read-only mode (disables all write operations)
 READ_ONLY_MODE=true
@@ -202,5 +202,5 @@ READ_ONLY_MODE=true
 
 Command-line alternative:
 ```bash
-uvx mcp-atlassian --enabled-tools "confluence_search,jira_get_issue"
+uvx mcp-atlassian --enabled-tools "confluence_find,jira_get"
 ```

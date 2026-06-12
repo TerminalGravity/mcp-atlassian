@@ -204,8 +204,8 @@ async def main():
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             result = await session.call_tool(
-                "jira_get_issue",
-                {"issue_key": "PROJ-123"}
+                "jira_get",
+                {"keys": "PROJ-123"}
             )
             print(result)
 

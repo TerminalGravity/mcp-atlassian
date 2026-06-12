@@ -17,10 +17,10 @@ Example: `/jira-investigate DS-1234`
 
 ## Workflow
 
-1. **Fetch the target issue** using `mcp__adr-jira__jira_get_issue`
+1. **Fetch the target issue** using `jira_get` with `keys='<issue-key>'` and `response_format='full'`
    - Get full details including description, comments, and links
 
-2. **Search for semantically similar issues** using `jira_semantic_search` (if available) or construct a search query
+2. **Search for semantically similar issues** using `jira_find` with `similar_to=<issue-key>` or a natural-language query
    - Use the issue summary and key description terms as the search query
    - Look for issues with similar problem descriptions
 
@@ -31,7 +31,7 @@ Example: `/jira-investigate DS-1234`
 
 4. **Search for related keywords**
    - Extract key technical terms from the description
-   - Search for those terms across the project
+   - Use `jira_find` with a JQL `text ~` query to search those terms across the project
 
 5. **Compile investigation report** with:
    - Issue summary and current status

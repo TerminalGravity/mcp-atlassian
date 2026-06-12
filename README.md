@@ -142,20 +142,43 @@ See [web/docs/JIRA-KNOWLEDGE-UI.md](web/docs/JIRA-KNOWLEDGE-UI.md) for detailed 
 
 ---
 
-## Vector Search Tools
+## MCP Tools (v2 surface)
 
 These tools are available when the MCP server is connected:
 
+### Jira — Read
 | Tool | Description |
 |------|-------------|
-| `jira_semantic_search` | Find issues by meaning, not just keywords |
-| `jira_knowledge_query` | Natural language queries with auto-extracted filters |
-| `jira_find_similar` | Find issues related to a specific issue |
-| `jira_detect_duplicates` | Check for potential duplicates before creating |
-| `jira_project_insights` | Aggregated patterns and analytics |
-| `jira_search_comments` | Search across issue comments |
+| `jira_get` | Get one or many issues by key(s); `response_format` summary\|full; include changelog/dates/SLA |
+| `jira_find` | Search by JQL or natural language; `similar_to=KEY` for related-issue discovery |
+| `jira_projects` | List projects, search fields by keyword, or look up users |
+| `jira_agile` | Boards, sprints, sprint issues, create/update sprints |
+| `jira_handoff` | Compact resumable state snapshot for context resets |
+| `jira_worklog` | Read or add worklogs |
+| `jira_knowledge` | Natural-language Q&A over the synced vector index |
+| `jira_vector_sync_status` | Check sync state and indexed issue counts |
 
-### Configuration
+### Jira — Write
+| Tool | Description |
+|------|-------------|
+| `jira_create` | Create a new issue (duplicate-guarded) |
+| `jira_update` | Modify fields on an existing issue |
+| `jira_assign` | Assign or unassign an issue |
+| `jira_delete` | Delete an issue |
+| `jira_transition` | Move one or many issues to a status by name |
+| `jira_comment` | Add or edit a comment; response includes a stored-body preview |
+| `jira_link` | Manage epic links, web links, and issue links (add or remove) |
+| `jira_versions` | List or create fix versions |
+
+### Confluence
+| Tool | Description |
+|------|-------------|
+| `confluence_find` | Search content or look up users (CQL or natural language) |
+| `confluence_get` | Get a page; optionally include children, comments, or labels |
+| `confluence_write` | Create, update, or delete a page; manage labels |
+| `confluence_comment` | Add a comment to a page |
+
+### Vector Search Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -164,20 +187,6 @@ These tools are available when the MCP server is connected:
 | `VECTOR_DB_PATH` | `./data/lancedb` | Vector database location |
 | `VECTOR_SYNC_PROJECTS` | `*` | Projects to sync (comma-separated or `*`) |
 | `VECTOR_SYNC_INTERVAL_MINUTES` | `30` | Background sync interval |
-
----
-
-## Standard MCP Tools
-
-All upstream tools are available:
-
-| Jira | Confluence |
-|------|------------|
-| `jira_search` - Search with JQL | `confluence_search` - Search with CQL |
-| `jira_get_issue` - Get issue details | `confluence_get_page` - Get page content |
-| `jira_create_issue` - Create issues | `confluence_create_page` - Create pages |
-| `jira_update_issue` - Update issues | `confluence_update_page` - Update pages |
-| `jira_transition_issue` - Change status | `confluence_add_comment` - Add comments |
 
 ---
 
