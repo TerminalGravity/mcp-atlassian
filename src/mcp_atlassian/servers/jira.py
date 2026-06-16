@@ -1170,6 +1170,71 @@ async def worklog(
 
 
 @jira_mcp.tool(
+    tags={"jira", "write"},
+    annotations={"title": "Attach File", "destructiveHint": True},
+)
+@check_write_access
+async def attach(
+    ctx: Context,
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g. 'PROJ-123'). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
+    file_path: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Absolute path of the file to attach. Comma-separated for "
+                "multiple files in one call."
+            ),
+            default=None,
+        ),
+    ] = None,
+    key: Annotated[
+        str | None, Field(description="(Alias for issue_key.)", default=None)
+    ] = None,
+    keys: Annotated[
+        str | None, Field(description="(Alias for issue_key.)", default=None)
+    ] = None,
+) -> dict:
+    """Upload one or more file attachments to a Jira issue.
+
+    file_path takes a single absolute path, or comma-separated paths for
+    multiple files. Per-file results carry success/filename/size/id; a missing
+    file returns {success: false, error: ...} for that file rather than raising,
+    so one bad path never aborts the rest.
+    """
+    jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required.")
+    if not file_path:
+        raise ValueError("file_path is required (one path or comma-separated paths).")
+
+    paths = _parse_csv(file_path) or []
+    if len(paths) == 1:
+        return _json(jira.upload_attachment(issue_key=issue_key, file_path=paths[0]))
+
+    results = [
+        jira.upload_attachment(issue_key=issue_key, file_path=p) for p in paths
+    ]
+    ok = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
+    return _json(
+        {
+            "key": issue_key,
+            "summary": {"ok": ok, "fail": len(results) - ok, "total": len(results)},
+            "results": results,
+        }
+    )
+
+
+@jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Agile (Boards & Sprints)"},
 )

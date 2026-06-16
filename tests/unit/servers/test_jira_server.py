@@ -274,13 +274,13 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         "TestJira", instructions="Test Jira MCP Server", lifespan=test_lifespan
     )
     from src.mcp_atlassian.servers.jira import (
-        agile, assign, comment, create, delete, find, get, handoff,
+        agile, assign, attach, comment, create, delete, find, get, handoff,
         link, projects, transition, update, versions, worklog,
     )
 
     jira_sub_mcp = FastMCP(name="TestJiraSubMCP")
-    for _tool in (agile, assign, comment, create, delete, find, get, handoff,
-                  link, projects, transition, update, versions, worklog):
+    for _tool in (agile, assign, attach, comment, create, delete, find, get,
+                  handoff, link, projects, transition, update, versions, worklog):
         jira_sub_mcp.add_tool(_tool)
     test_mcp.mount(jira_sub_mcp, prefix="jira")
     return test_mcp
@@ -1205,6 +1205,58 @@ async def test_jira_link_remove(jira_client, mock_jira_fetcher):
     content = json.loads(response.content[0].text)
     assert content["success"] is True
     mock_jira_fetcher.remove_issue_link.assert_called_once_with("10500")
+
+
+# --- v2 surface: jira_attach ------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_jira_attach_single(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.upload_attachment.return_value = {
+        "success": True, "filename": "x.png", "size": 123, "id": "10001",
+    }
+    response = await jira_client.call_tool(
+        "jira_attach", {"issue_key": "TEST-1", "file_path": "/tmp/x.png"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["filename"] == "x.png"
+    mock_jira_fetcher.upload_attachment.assert_called_once_with(
+        issue_key="TEST-1", file_path="/tmp/x.png"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_attach_accepts_key_alias(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.upload_attachment.return_value = {"success": True, "filename": "a"}
+    response = await jira_client.call_tool(
+        "jira_attach", {"key": "TEST-2", "file_path": "/tmp/a"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    mock_jira_fetcher.upload_attachment.assert_called_once_with(
+        issue_key="TEST-2", file_path="/tmp/a"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_attach_multiple_files(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.upload_attachment.side_effect = [
+        {"success": True, "filename": "a"},
+        {"success": False, "error": "File not found: /tmp/b"},
+    ]
+    response = await jira_client.call_tool(
+        "jira_attach", {"issue_key": "TEST-3", "file_path": "/tmp/a,/tmp/b"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["summary"] == {"ok": 1, "fail": 1, "total": 2}
+    assert mock_jira_fetcher.upload_attachment.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_jira_attach_requires_file_path(jira_client):
+    with pytest.raises(Exception, match="file_path"):
+        await jira_client.call_tool("jira_attach", {"issue_key": "TEST-1"})
 
 
 # --- v2 surface: jira_worklog -----------------------------------------------

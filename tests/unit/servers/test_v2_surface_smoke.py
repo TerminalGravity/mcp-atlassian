@@ -15,14 +15,14 @@ show only 14 jira tools). Do not "fix" these to ``src.`` imports.
 import asyncio
 
 EXPECTED_JIRA = {
-    "agile", "assign", "comment", "create", "delete", "find", "get",
+    "agile", "assign", "attach", "comment", "create", "delete", "find", "get",
     "handoff", "knowledge", "link", "projects", "transition", "update",
     "vector_sync_status", "versions", "worklog",
 }
 EXPECTED_CONFLUENCE = {"comment", "find", "get", "write"}
 
 
-def test_jira_surface_is_exactly_16_tools():
+def test_jira_surface_is_exactly_17_tools():
     from mcp_atlassian.servers.jira import jira_mcp
 
     tools = set(asyncio.run(jira_mcp.get_tools()))
@@ -60,4 +60,4 @@ def test_total_v2_surface_is_20():
     total = len(asyncio.run(jira_mcp.get_tools())) + len(
         asyncio.run(confluence_mcp.get_tools())
     )
-    assert total == 20, f"expected 20 v2 tools, assembled {total}"
+    assert total == 21, f"expected 21 v2 tools, assembled {total}"
