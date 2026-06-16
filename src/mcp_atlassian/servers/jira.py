@@ -24,8 +24,15 @@ jira_mcp = FastMCP(
 SUMMARY_FIELDS = ["summary", "status", "priority", "assignee", "issuetype", "updated"]
 
 
-def _json(data: Any) -> str:
-    return json.dumps(data, indent=2, ensure_ascii=False)
+def _json(data: Any) -> Any:
+    # Tools return STRUCTURED content (dicts), not pre-stringified JSON.
+    # FastMCP serializes a dict return into structuredContent natively, so the
+    # Claude Code TUI renders it as a nested, readable object. Returning a JSON
+    # *string* instead makes FastMCP wrap it as {"result": "<escaped JSON>"},
+    # which renders as an unreadable wall of \n and \" escapes. This helper is
+    # now an identity passthrough kept at every return site to preserve the
+    # single, intentional "this is the tool result" boundary.
+    return data
 
 
 def _parse_csv(value: str | None) -> list[str] | None:
@@ -112,7 +119,7 @@ def _operation_response(
     return_mode: str = "summary",
     response_fields: str | None = None,
     extra: dict[str, Any] | None = None,
-) -> str:
+) -> dict[str, Any]:
     result: dict[str, Any] = {"message": message}
     key = issue_key
     # Response shaping must NEVER fail a write that already succeeded —
@@ -153,15 +160,13 @@ def _operation_response(
         return _json(result)
     except Exception as e:
         logger.warning(f"_operation_response: serialization failed: {e}")
-        return json.dumps(
-            {
-                "message": message,
-                "key": key
-                if isinstance(key, str)
-                else (str(key) if key is not None else None),
-                "serialization_error": str(e),
-            }
-        )
+        return {
+            "message": message,
+            "key": key
+            if isinstance(key, str)
+            else (str(key) if key is not None else None),
+            "serialization_error": str(e),
+        }
 
 
 def _find_transition(
@@ -356,7 +361,7 @@ async def get(
             default=None,
         ),
     ] = None,
-) -> str:
+) -> dict:
     """Get one or many Jira issues in a token-budgeted form.
 
     Replaces get_issue / get_issue_summary / quick_status / batch_get_changelogs /
@@ -502,7 +507,7 @@ async def find(
             default=None,
         ),
     ] = None,
-) -> str:
+) -> dict:
     """Find Jira issues — the ONLY search tool. JQL, semantic, or similar-to.
 
     Replaces search / list_issues / get_project_issues / semantic_search /
@@ -620,7 +625,7 @@ async def transition(
             default="summary",
         ),
     ] = "summary",
-) -> str:
+) -> dict:
     """Move one or many Jira issues to a new status by NAME.
 
     Handles single and batch transitions and resolves status names to
@@ -730,7 +735,7 @@ async def comment(
             default="auto",
         ),
     ] = "auto",
-) -> str:
+) -> dict:
     """Add or edit a comment on a Jira issue.
 
     Replaces add_comment / edit_comment. The body is always run through the
@@ -850,7 +855,7 @@ async def link(
         str | None,
         Field(description="(remove=true) The issue-link id to delete.", default=None),
     ] = None,
-) -> str:
+) -> dict:
     """Create or remove any kind of Jira link.
 
     Replaces link_to_epic / create_issue_link / create_remote_issue_link /
@@ -984,7 +989,7 @@ async def worklog(
         str | None,
         Field(description="(Optional, add) New remaining estimate.", default=None),
     ] = None,
-) -> str:
+) -> dict:
     """Read worklogs (no time_spent) or add one (time_spent given).
 
     Replaces get_worklog / add_worklog.
@@ -1069,7 +1074,7 @@ async def agile(
     start_at: Annotated[
         int, Field(description="Pagination offset", default=0, ge=0)
     ] = 0,
-) -> str:
+) -> dict:
     """Boards and sprints, one tool. Replaces get_agile_boards /
     get_sprints_from_board / get_sprint_issues / create_sprint / update_sprint /
     get_board_issues (use jira_find with JQL for board-issue queries).
@@ -1174,7 +1179,7 @@ async def versions(
     description: Annotated[
         str | None, Field(description="(create) Version description.", default=None)
     ] = None,
-) -> str:
+) -> dict:
     """List a project's fix versions, or create one (name given).
 
     Replaces get_project_versions / create_version / batch_create_versions.
@@ -1221,7 +1226,7 @@ async def projects(
     limit: Annotated[
         int, Field(description="Max results", default=20, ge=1, le=100)
     ] = 20,
-) -> str:
+) -> dict:
     """Workspace discovery: project list (default), field schema search
     (field_keyword), or user lookup (user).
 
@@ -1237,9 +1242,16 @@ async def projects(
     if field_keyword is not None:
         return _json({"fields": jira.search_fields(field_keyword, limit=limit)})
     all_projects = jira.get_all_projects(include_archived=include_archived)
-    return _json(
-        {"projects": ResponseFormatter.compress_projects(all_projects)[:limit]}
-    )
+    compressed = ResponseFormatter.compress_projects(all_projects)
+    out: dict[str, Any] = {"projects": compressed[:limit]}
+    if len(compressed) > limit:
+        out["truncated"] = True
+        out["total"] = len(compressed)
+        out["note"] = (
+            f"Showing {limit} of {len(compressed)} projects. "
+            "Raise 'limit' or filter with 'field_keyword'/'user' to narrow."
+        )
+    return _json(out)
 
 
 def _handoff_line(raw: dict[str, Any]) -> dict[str, Any]:
@@ -1279,7 +1291,7 @@ async def handoff(
         int,
         Field(description="Max issues per section.", default=10, ge=1, le=30),
     ] = 10,
-) -> str:
+) -> dict:
     """Compact resumable state snapshot (~500 tokens) for context resets.
 
     Emits my open issues and my recently-updated issues as one-line cards.
@@ -1429,7 +1441,7 @@ async def create(
             default=False,
         ),
     ] = False,
-) -> str:
+) -> dict:
     """Create a new Jira issue.
 
     Duplicate guard: if an identical-summary issue was created in the same
@@ -1577,7 +1589,7 @@ async def update(
             default=None,
         ),
     ] = None,
-) -> str:
+) -> dict:
     """Update an existing Jira issue including changing status, adding Epic links, updating fields, etc.
 
     Args:
@@ -1681,7 +1693,7 @@ async def assign(
             )
         ),
     ],
-) -> str:
+) -> dict:
     """Set the assignee on a Jira issue with a minimal response payload.
 
     Use this instead of ``jira_update`` for assignee-only writes —
@@ -1747,7 +1759,7 @@ async def assign(
 async def delete(
     ctx: Context,
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. PROJ-123)")],
-) -> str:
+) -> dict:
     """Delete an existing Jira issue.
 
     Args:
@@ -1767,7 +1779,7 @@ async def delete(
         "message": f"Issue {issue_key} has been deleted successfully.",
     }
     # The underlying method raises on failure, so if we reach here, it's success.
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _json(result)
 
 
 # Import vector tools to register them on jira_mcp

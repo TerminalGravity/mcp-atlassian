@@ -937,7 +937,9 @@ def test_operation_response_never_fails_on_unserializable_issue():
         issue_key="DS-1",
         return_mode="summary",
     )
-    parsed = json.loads(out)  # must not raise, must be valid JSON
+    # Tools now return structured dicts (FastMCP serializes to structuredContent).
+    parsed = out
+    assert isinstance(parsed, dict)
     assert parsed["message"] == "Issue transitioned successfully"
     assert parsed["key"] == "DS-1"  # explicit issue_key wins over garbage
 
@@ -963,7 +965,9 @@ def test_operation_response_degrades_when_shaping_raises_and_key_is_garbage():
         issue_key=None,  # the create_issue call-site shape
         return_mode="summary",
     )
-    parsed = json.loads(out)  # must parse
+    # Tools now return structured dicts (FastMCP serializes to structuredContent).
+    parsed = out
+    assert isinstance(parsed, dict)
     assert parsed["message"] == "Issue created successfully"
     assert "response_shaping_error" in parsed
     assert "key" not in parsed or parsed["key"] is None or isinstance(parsed["key"], str)
@@ -1303,7 +1307,7 @@ async def test_jira_agile_boards_allowed_in_read_only(mock_jira_fetcher):
     mock_jira_fetcher.get_all_agile_boards_model.return_value = [board]
     with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
         out = await agile.fn(_ROContext(), action="boards")  # read must NOT raise in read-only
-    assert "boards" in json.loads(out)
+    assert "boards" in out
 
 
 @pytest.mark.anyio
@@ -1321,7 +1325,7 @@ async def test_jira_versions_list_allowed_in_read_only(mock_jira_fetcher):
     mock_jira_fetcher.get_project_versions.return_value = [{"name": "v1.0"}]
     with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
         out = await versions.fn(_ROContext(), project_key="TEST")  # read must NOT raise
-    assert json.loads(out)["versions"][0]["name"] == "v1.0"
+    assert out["versions"][0]["name"] == "v1.0"
 
 
 # --- v2 surface: jira_handoff ------------------------------------------------

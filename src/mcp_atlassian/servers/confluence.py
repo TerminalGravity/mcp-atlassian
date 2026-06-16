@@ -1,8 +1,7 @@
 """Confluence FastMCP server instance and tool definitions."""
 
-import json
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
 from pydantic import BeforeValidator, Field
@@ -20,6 +19,16 @@ confluence_mcp = FastMCP(
 )
 
 _GET_INCLUDES = {"children", "comments", "labels"}
+
+
+def _json(data: Any) -> Any:
+    # Tools return STRUCTURED content (dicts), not pre-stringified JSON.
+    # FastMCP serializes a dict return into structuredContent natively, so the
+    # Claude Code TUI renders it as a nested, readable object. Returning a JSON
+    # *string* instead makes FastMCP wrap it as {"result": "<escaped JSON>"},
+    # which renders as an unreadable wall of \n and \" escapes. Identity
+    # passthrough kept at the return boundary as the single tool-result marker.
+    return data
 
 
 @confluence_mcp.tool(
@@ -50,7 +59,7 @@ async def find(
         int,
         Field(description="Max results (1-50)", default=10, ge=1, le=50),
     ] = 10,
-) -> str:
+) -> dict:
     """Search Confluence content (or users). Replaces search / search_user."""
     confluence_fetcher = await get_confluence_fetcher(ctx)
     if search_users:
@@ -59,11 +68,7 @@ async def find(
         ):
             query = f'user.fullname ~ "{query}"'
         users = confluence_fetcher.search_user(query, limit=limit)
-        return json.dumps(
-            {"results": [u.to_simplified_dict() for u in users]},
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json({"results": [u.to_simplified_dict() for u in users]})
     if query and not any(
         x in query for x in ["=", "~", ">", "<", " AND ", " OR ", "currentUser()"]
     ):
@@ -77,11 +82,7 @@ async def find(
             pages = confluence_fetcher.search(query, limit=limit, spaces_filter=spaces)
     else:
         pages = confluence_fetcher.search(query, limit=limit, spaces_filter=spaces)
-    return json.dumps(
-        {"results": [p.to_simplified_dict() for p in pages]},
-        indent=2,
-        ensure_ascii=False,
-    )
+    return _json({"results": [p.to_simplified_dict() for p in pages]})
 
 
 @confluence_mcp.tool(
@@ -119,7 +120,7 @@ async def get(
             default=True,
         ),
     ] = True,
-) -> str:
+) -> dict:
     """Get a Confluence page with optional children/comments/labels in ONE call.
 
     Replaces get_page / get_page_children / get_comments / get_labels.
@@ -143,11 +144,7 @@ async def get(
     else:
         raise ValueError("Provide page_id OR both title and space_key.")
     if not page_object:
-        return json.dumps(
-            {"error": "Page not found with the provided identifiers."},
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json({"error": "Page not found with the provided identifiers."})
     resolved_id = str(page_id or getattr(page_object, "id", "") or "")
     result: dict = {"metadata": page_object.to_simplified_dict()}
     if "children" in includes:
@@ -172,7 +169,7 @@ async def get(
             label.to_simplified_dict()
             for label in confluence_fetcher.get_page_labels(resolved_id)
         ]
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _json(result)
 
 
 @confluence_mcp.tool(
@@ -235,7 +232,7 @@ async def write(
         bool,
         Field(description="Required true for delete.", default=False),
     ] = False,
-) -> str:
+) -> dict:
     """Create, update, or delete a Confluence page (one tool).
 
     Replaces create_page / update_page / delete_page / add_label.
@@ -248,11 +245,7 @@ async def write(
         if not confirm:
             raise ValueError("Deleting a page requires confirm=true.")
         ok = confluence_fetcher.delete_page(page_id=page_id)
-        return json.dumps(
-            {"success": bool(ok), "action": "deleted", "page_id": page_id},
-            indent=2,
-            ensure_ascii=False,
-        )
+        return _json({"success": bool(ok), "action": "deleted", "page_id": page_id})
     if content_format not in ("markdown", "wiki", "storage"):
         raise ValueError(
             f"Invalid content_format: {content_format}. Must be 'markdown', 'wiki', or 'storage'."
@@ -297,7 +290,7 @@ async def write(
             except Exception as e:
                 logger.warning(f"confluence_write: label '{name}' failed: {e}")
         result["labels_added"] = applied
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return _json(result)
 
 
 @confluence_mcp.tool(
@@ -309,18 +302,12 @@ async def comment(
     ctx: Context,
     page_id: Annotated[str, Field(description="The page to comment on.")],
     body: Annotated[str, Field(description="Comment content (Markdown).")],
-) -> str:
+) -> dict:
     """Add a comment to a Confluence page. Replaces add_comment."""
     confluence_fetcher = await get_confluence_fetcher(ctx)
     created = confluence_fetcher.add_comment(page_id=page_id, content=body)
     if created:
-        return json.dumps(
-            {"success": True, "comment": created.to_simplified_dict()},
-            indent=2,
-            ensure_ascii=False,
-        )
-    return json.dumps(
-        {"success": False, "message": f"Unable to add comment to page {page_id}."},
-        indent=2,
-        ensure_ascii=False,
+        return _json({"success": True, "comment": created.to_simplified_dict()})
+    return _json(
+        {"success": False, "message": f"Unable to add comment to page {page_id}."}
     )
