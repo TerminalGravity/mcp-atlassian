@@ -4,7 +4,6 @@ These tools provide semantic search capabilities over indexed Jira issues
 using vector embeddings and hybrid search.
 """
 
-import json
 import logging
 from typing import Annotated, Any
 
@@ -18,6 +17,17 @@ from mcp_atlassian.vector.self_query import SelfQueryParser
 from mcp_atlassian.vector.store import LanceDBStore
 
 logger = logging.getLogger(__name__)
+
+
+def _json(data: Any) -> Any:
+    # Tools return STRUCTURED content (dicts), not pre-stringified JSON.
+    # FastMCP serializes a dict return into structuredContent natively, so the
+    # Claude Code TUI renders it as a nested, readable object. Returning a JSON
+    # *string* instead makes FastMCP wrap it as {"result": "<escaped JSON>"},
+    # which renders as an unreadable wall of \n and \" escapes. Identity
+    # passthrough kept at the return boundary as the single tool-result marker.
+    return data
+
 
 # Lazy-initialized singletons
 _vector_store: LanceDBStore | None = None
@@ -157,7 +167,7 @@ async def semantic_search_impl(
 )
 async def vector_sync_status(
     ctx: Context,
-) -> str:
+) -> dict:
     """
     Get the current status of the vector search index.
 
@@ -207,13 +217,13 @@ async def vector_sync_status(
             },
         }
 
-        return json.dumps(response, indent=2, ensure_ascii=False)
+        return _json(response)
 
     except Exception as e:
         logger.error(f"Sync status error: {e}", exc_info=True)
-        return json.dumps({
+        return _json({
             "error": str(e),
-        }, indent=2)
+        })
 
 
 @jira_mcp.tool(
@@ -243,7 +253,7 @@ async def knowledge(
             default=10,
         ),
     ] = 10,
-) -> str:
+) -> dict:
     """Ask the synced Jira knowledge base a natural-language question.
 
     The ONLY knowledge/analytics tool. Parses the question into semantic
@@ -260,10 +270,10 @@ async def knowledge(
         # Check if index has data
         stats = store.get_stats()
         if stats["total_issues"] == 0:
-            return json.dumps({
+            return _json({
                 "error": "Vector index is empty. Run sync first.",
                 "hint": "uv run python -m mcp_atlassian.vector.cli sync --full",
-            }, indent=2)
+            })
 
         # Parse the query using LLM
         parsed = await parser.parse(query)
@@ -300,11 +310,11 @@ async def knowledge(
             )
         else:
             # No filters and no semantic query - return error
-            return json.dumps({
+            return _json({
                 "error": "Could not understand query",
                 "query": query,
                 "hint": "Try a more specific query like 'bugs in PROJECT' or 'issues about authentication'",
-            }, indent=2)
+            })
 
         # Format response (token-optimized)
         response = {
@@ -331,11 +341,11 @@ async def knowledge(
             "hint": "Use jira_get with issue keys for full details",
         }
 
-        return json.dumps(response, indent=2, ensure_ascii=False)
+        return _json(response)
 
     except Exception as e:
         logger.error(f"Knowledge query error: {e}", exc_info=True)
-        return json.dumps({
+        return _json({
             "error": str(e),
             "query": query,
-        }, indent=2)
+        })
