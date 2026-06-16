@@ -1208,6 +1208,18 @@ async def projects(
             default=None,
         ),
     ] = None,
+    issue_types: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(Optional) A project key (e.g. 'AI'). Returns the issue types "
+                "that can actually be CREATED in that project — call this before "
+                "jira_create when the valid types are unknown, instead of guessing "
+                "'Epic'/'Story'/'Task' and hitting 'Specify a valid issue type'."
+            ),
+            default=None,
+        ),
+    ] = None,
     user: Annotated[
         str | None,
         Field(
@@ -1222,10 +1234,12 @@ async def projects(
         int, Field(description="Max results", default=20, ge=1, le=100)
     ] = 20,
 ) -> str:
-    """Workspace discovery: project list (default), field schema search
-    (field_keyword), or user lookup (user).
+    """Workspace discovery: project list (default), creatable issue types for a
+    project (issue_types), field schema search (field_keyword), or user lookup
+    (user).
 
-    Replaces get_all_projects / search_fields / get_user_profile.
+    Replaces get_all_projects / search_fields / get_user_profile. Use the
+    issue_types mode to discover valid jira_create issue types up front.
     """
     jira = await get_jira_fetcher(ctx)
     if user is not None:
@@ -1234,6 +1248,18 @@ async def projects(
             return _json({"success": True, "user": found.to_simplified_dict()})
         except Exception as e:
             return _json({"success": False, "error": str(e), "user_identifier": user})
+    if issue_types is not None:
+        raw_types = jira.get_project_issue_types(issue_types)
+        compact = [
+            {
+                "id": it.get("id"),
+                "name": it.get("name"),
+                "subtask": it.get("subtask", False),
+                "description": (it.get("description") or "")[:120],
+            }
+            for it in raw_types
+        ]
+        return _json({"project": issue_types, "issue_types": compact})
     if field_keyword is not None:
         return _json({"fields": jira.search_fields(field_keyword, limit=limit)})
     all_projects = jira.get_all_projects(include_archived=include_archived)
@@ -1385,7 +1411,7 @@ async def create(
                 "- Due date: {'duedate': '2025-02-15'}  (use 'duedate' NOT 'due_date')\n"
                 "- Labels: {'labels': ['frontend', 'urgent']}\n"
                 "- Priority: {'priority': {'name': 'High'}}\n"
-                "- Parent: {'parent': {'key': 'PROJ-123'}}\n"
+                "- Parent: {'parent': 'PROJ-123'}  (the issue KEY as a string, not a {'key': ...} object)\n"
                 "- Fix versions: {'fixVersions': [{'name': 'v1.0'}]}\n"
                 "- Custom fields: {'customfield_10010': 'value'}\n\n"
                 "IMPORTANT: Do NOT pass labels, duedate, priority as top-level parameters.\n"

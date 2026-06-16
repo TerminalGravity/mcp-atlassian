@@ -803,6 +803,35 @@ class TestIssuesMixin:
         assert result is not None
         assert result.key == "TEST-456"
 
+    def test_create_issue_with_parent_as_dict(self, issues_mixin: IssuesMixin):
+        """Parent passed as a {'key': ...} object must not be double-wrapped."""
+        issues_mixin.jira.create_issue.return_value = {
+            "id": "12345",
+            "key": "TEST-456",
+        }
+        issues_mixin.jira.get_issue.return_value = {
+            "id": "12345",
+            "key": "TEST-456",
+            "fields": {
+                "summary": "Test Task with Dict Parent",
+                "issuetype": {"name": "Task"},
+                "parent": {"key": "TEST-123"},
+            },
+        }
+        issues_mixin._get_account_id = MagicMock(return_value="user123")
+
+        # Caller follows the Jira REST convention and shapes parent themselves.
+        issues_mixin.create_issue(
+            project_key="TEST",
+            summary="Test Task with Dict Parent",
+            issue_type="Task",
+            parent={"key": "TEST-123"},
+        )
+
+        fields = issues_mixin.jira.create_issue.call_args[1]["fields"]
+        # Stays flat — not {"key": {"key": "TEST-123"}}.
+        assert fields["parent"] == {"key": "TEST-123"}
+
     def test_create_issue_with_fixversions(self, issues_mixin: IssuesMixin):
         """Test creating an issue with fixVersions in additional_fields."""
         # Mock create_issue response

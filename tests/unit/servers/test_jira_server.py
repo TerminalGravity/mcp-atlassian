@@ -1257,6 +1257,23 @@ async def test_jira_projects_field_search(jira_client, mock_jira_fetcher):
 
 
 @pytest.mark.anyio
+async def test_jira_projects_issue_types(jira_client, mock_jira_fetcher):
+    """issue_types mode returns the creatable types for a project, compacted."""
+    mock_jira_fetcher.get_project_issue_types.return_value = [
+        {"id": "10044", "name": "Initiative", "subtask": False, "description": "Big bet"},
+        {"id": "10001", "name": "Story", "subtask": False, "description": ""},
+    ]
+    response = await jira_client.call_tool("jira_projects", {"issue_types": "AI"})
+    content = json.loads(response.content[0].text)
+    mock_jira_fetcher.get_project_issue_types.assert_called_once_with("AI")
+    assert content["project"] == "AI"
+    names = [t["name"] for t in content["issue_types"]]
+    assert names == ["Initiative", "Story"]
+    assert content["issue_types"][0]["id"] == "10044"
+    assert content["issue_types"][0]["subtask"] is False
+
+
+@pytest.mark.anyio
 async def test_jira_projects_list(jira_client, mock_jira_fetcher):
     """Default (no-arg) path lists projects via get_all_projects."""
     response = await jira_client.call_tool("jira_projects", {})

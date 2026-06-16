@@ -762,7 +762,14 @@ class IssuesMixin(
         if "parent" in kwargs:
             parent_key = kwargs.get("parent")
             if parent_key:
-                fields["parent"] = {"key": parent_key}
+                # Accept either a bare issue key ("PROJ-123") or an
+                # already-shaped {"key": "PROJ-123"} / {"id": "10001"} object,
+                # so callers who follow the Jira REST convention don't trip
+                # on a double-wrapped {"key": {"key": ...}}.
+                if isinstance(parent_key, dict):
+                    fields["parent"] = parent_key
+                else:
+                    fields["parent"] = {"key": parent_key}
             # Remove parent from kwargs to avoid double processing
             kwargs.pop("parent", None)
         elif "issuetype" in fields and fields["issuetype"]["name"].lower() in (
