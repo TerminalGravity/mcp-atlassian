@@ -400,6 +400,7 @@ async def test_create_issue(jira_client, mock_jira_fetcher):
     text_content = response.content[0]
     assert text_content.type == "text"
     content = json.loads(text_content.text)
+    assert content["success"] is True
     assert content["message"] == "Issue created successfully"
     assert "issue" in content
     assert content["issue"]["key"] == "TEST-456"
@@ -438,6 +439,7 @@ async def test_create_issue_accepts_json_string(jira_client, mock_jira_fetcher):
     text_content = response.content[0]
     assert text_content.type == "text"
     content = json.loads(text_content.text)
+    assert content["success"] is True
     assert content["message"] == "Issue created successfully"
     assert "issue" in content
     mock_jira_fetcher.create_issue.assert_called_with(
@@ -712,6 +714,16 @@ async def test_jira_get_rejects_bad_include(jira_client):
         )
 
 
+@pytest.mark.anyio
+async def test_jira_get_rejects_bogus_response_format(jira_client):
+    """response_format is Literal-typed — a bogus value is rejected at the
+    schema layer (symmetry with transition's return_mode rejection)."""
+    with pytest.raises(Exception, match="response_format"):
+        await jira_client.call_tool(
+            "jira_get", {"keys": "TEST-123", "response_format": "bogus"}
+        )
+
+
 def test_issue_card_extras_from_raw_carries_changelogs():
     issue = _StubIssue(
         {
@@ -903,6 +915,7 @@ async def test_jira_transition_single_by_name(jira_client, mock_jira_fetcher):
         "jira_transition", {"keys": "TEST-123", "to_status": "ready for qa"}
     )
     content = json.loads(response.content[0].text)
+    assert content["success"] is True
     assert content["key"] == "TEST-123"
     assert "next_transitions" in content
     mock_jira_fetcher.transition_issue.assert_called_once()
@@ -919,6 +932,7 @@ async def test_jira_transition_batch(jira_client, mock_jira_fetcher):
         "jira_transition", {"keys": "TEST-1,TEST-2,TEST-3", "to_status": "Done"}
     )
     content = json.loads(response.content[0].text)
+    assert content["success"] is True
     assert content["summary"]["total"] == 3
     assert content["summary"]["ok"] == 3
     assert mock_jira_fetcher.transition_issue.call_count == 3
@@ -1315,6 +1329,7 @@ async def test_jira_worklog_add(jira_client, mock_jira_fetcher):
         "jira_worklog", {"issue_key": "TEST-123", "time_spent": "30m"}
     )
     content = json.loads(response.content[0].text)
+    assert content["success"] is True
     assert content["worklog"]["timeSpent"] == "30m"
     mock_jira_fetcher.add_worklog.assert_called_once()
 
@@ -1335,6 +1350,55 @@ async def test_jira_agile_boards(jira_client, mock_jira_fetcher):
     response = await jira_client.call_tool("jira_agile", {"action": "boards"})
     content = json.loads(response.content[0].text)
     assert content["boards"][0]["name"] == "DS board"
+
+
+@pytest.mark.anyio
+async def test_jira_agile_create_sprint_returns_success(jira_client, mock_jira_fetcher):
+    sprint = MagicMock()
+    sprint.to_simplified_dict.return_value = {"id": 7, "name": "Sprint 7"}
+    mock_jira_fetcher.create_sprint.return_value = sprint
+    response = await jira_client.call_tool(
+        "jira_agile",
+        {
+            "action": "create_sprint",
+            "board_id": "1",
+            "sprint_name": "Sprint 7",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-14",
+        },
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["sprint"]["name"] == "Sprint 7"
+
+
+@pytest.mark.anyio
+async def test_jira_agile_update_sprint_returns_success(jira_client, mock_jira_fetcher):
+    sprint = MagicMock()
+    sprint.to_simplified_dict.return_value = {"id": 42, "state": "closed"}
+    mock_jira_fetcher.update_sprint.return_value = sprint
+    response = await jira_client.call_tool(
+        "jira_agile",
+        {"action": "update_sprint", "sprint_id": "42", "state": "closed"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["sprint"]["state"] == "closed"
+
+
+@pytest.mark.anyio
+async def test_jira_agile_update_sprint_failure_returns_success_false(
+    jira_client, mock_jira_fetcher
+):
+    """A None return from update_sprint yields a uniform success: False envelope."""
+    mock_jira_fetcher.update_sprint.return_value = None
+    response = await jira_client.call_tool(
+        "jira_agile",
+        {"action": "update_sprint", "sprint_id": "42", "state": "closed"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is False
+    assert "error" in content
 
 
 @pytest.mark.anyio
@@ -1364,6 +1428,7 @@ async def test_jira_versions_create(jira_client, mock_jira_fetcher):
         "jira_versions", {"project_key": "TEST", "name": "v2.0"}
     )
     content = json.loads(response.content[0].text)
+    assert content["success"] is True
     assert content["version"]["name"] == "v2.0"
     mock_jira_fetcher.create_project_version.assert_called_once()
 
@@ -1664,6 +1729,7 @@ async def test_jira_update_calls_update_issue(jira_client, mock_jira_fetcher):
         },
     )
     content = json.loads(response.content[0].text)
+    assert content["success"] is True
     assert content["message"] == "Issue updated successfully"
     assert content["key"] == "TEST-999"
     mock_jira_fetcher.update_issue.assert_called_once_with(

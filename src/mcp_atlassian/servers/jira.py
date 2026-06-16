@@ -193,7 +193,7 @@ def _operation_response(
     response_fields: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    result: dict[str, Any] = {"message": message}
+    result: dict[str, Any] = {"success": True, "message": message}
     key = issue_key
     # Response shaping must NEVER fail a write that already succeeded —
     # an error response after a completed write makes the agent retry and
@@ -408,7 +408,7 @@ async def get(
         ),
     ],
     response_format: Annotated[
-        str | None,
+        Literal["summary", "minimal", "full"] | None,
         Field(
             description=(
                 "Canonical verbosity param. 'summary' (default, ~1 KB/issue: "
@@ -422,7 +422,7 @@ async def get(
         ),
     ] = None,
     return_mode: Annotated[
-        str | None,
+        Literal["summary", "minimal", "full"] | None,
         Field(
             description="(Alias for response_format; 'minimal' maps to 'summary'.)",
             default=None,
@@ -719,20 +719,20 @@ async def transition(
             default=None,
         ),
     ] = None,
-    return_mode: Annotated[
-        str | None,
+    response_format: Annotated[
+        Literal["summary", "minimal", "full"] | None,
         Field(
             description=(
                 "Canonical verbosity param. 'summary' (default), 'minimal', or "
-                "'full'. Single-key only. (Alias: response_format is also "
+                "'full'. Single-key only. (Alias: return_mode is also "
                 "accepted.)"
             ),
             default=None,
         ),
     ] = None,
-    response_format: Annotated[
-        str | None,
-        Field(description="(Alias for return_mode.)", default=None),
+    return_mode: Annotated[
+        Literal["summary", "minimal", "full"] | None,
+        Field(description="(Alias for response_format; same values.)", default=None),
     ] = None,
 ) -> dict:
     """Move one or many Jira issues to a new status by NAME.
@@ -793,6 +793,7 @@ async def transition(
             logger.warning(f"transition: {key} failed: {e}")
     return _json(
         {
+            "success": fail == 0,
             "target": to_status or transition_id,
             "summary": {"ok": ok, "fail": fail, "total": len(key_list)},
             "results": results,
@@ -904,7 +905,11 @@ async def comment(
         action = "added"
 
     if not isinstance(result, dict):
-        envelope: dict[str, Any] = {"action": action, "comment": result}
+        envelope: dict[str, Any] = {
+            "success": True,
+            "action": action,
+            "comment": result,
+        }
         if warnings:
             envelope["warnings"] = warnings
         return _json(envelope)
@@ -1046,7 +1051,6 @@ async def link(
             issue=issue,
             issue_key=issue_key,
             return_mode="minimal",
-            extra={"success": True},
         )
 
     if kind == "web":
@@ -1185,7 +1189,12 @@ async def worklog(
         remaining_estimate=remaining_estimate,
     )
     return _json(
-        {"message": "Worklog added successfully", "key": issue_key, "worklog": result}
+        {
+            "success": True,
+            "message": "Worklog added successfully",
+            "key": issue_key,
+            "worklog": result,
+        }
     )
 
 
@@ -1314,7 +1323,11 @@ async def agile(
             goal=goal,
         )
         return _json(
-            {"message": "Sprint created", "sprint": sprint.to_simplified_dict()}
+            {
+                "success": True,
+                "message": "Sprint created",
+                "sprint": sprint.to_simplified_dict(),
+            }
         )
 
     # update_sprint
@@ -1330,8 +1343,16 @@ async def agile(
         goal=goal,
     )
     if sprint is None:
-        return _json({"error": f"Failed to update sprint {sprint_id}."})
-    return _json({"message": "Sprint updated", "sprint": sprint.to_simplified_dict()})
+        return _json(
+            {"success": False, "error": f"Failed to update sprint {sprint_id}."}
+        )
+    return _json(
+        {
+            "success": True,
+            "message": "Sprint updated",
+            "sprint": sprint.to_simplified_dict(),
+        }
+    )
 
 
 @jira_mcp.tool(
@@ -1375,7 +1396,7 @@ async def versions(
         release_date=release_date,
         description=description,
     )
-    return _json({"message": "Version created", "version": version})
+    return _json({"success": True, "message": "Version created", "version": version})
 
 
 @jira_mcp.tool(
@@ -1611,7 +1632,21 @@ async def create(
         ),
     ] = None,
     return_mode: Annotated[
+        Literal["summary", "minimal", "full"] | None,
+        Field(description="(Alias for response_format; same values.)", default=None),
+    ] = None,
+    response_fields: Annotated[
         str | None,
+        Field(
+            description=(
+                "Comma-separated fields to include when response_format='summary'. "
+                "Examples: key,summary,status,assignee,updated"
+            ),
+            default=None,
+        ),
+    ] = None,
+    response_format: Annotated[
+        Literal["summary", "minimal", "full"] | None,
         Field(
             description=(
                 "Canonical verbosity param. Response size: 'summary' (default — "
@@ -1619,24 +1654,10 @@ async def create(
                 "message only), or 'full' (legacy: complete issue payload). New "
                 "tickets created via this tool are small by definition, but "
                 "consistency with the other write tools keeps callers' code "
-                "uniform. (Alias: response_format is also accepted.)"
+                "uniform. (Alias: return_mode is also accepted.)"
             ),
             default=None,
         ),
-    ] = None,
-    response_fields: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Comma-separated fields to include when return_mode='summary'. "
-                "Examples: key,summary,status,assignee,updated"
-            ),
-            default=None,
-        ),
-    ] = None,
-    response_format: Annotated[
-        str | None,
-        Field(description="(Alias for return_mode.)", default=None),
     ] = None,
     force: Annotated[
         bool,
@@ -1803,31 +1824,31 @@ async def update(
         ),
     ] = None,
     return_mode: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Canonical verbosity param. Response size: 'summary' (default — "
-                "key + url + a few shaped fields), 'minimal' (key + url + "
-                "message only), or 'full' (legacy: complete issue payload). Big "
-                "descriptions can blow past harness token limits on 'full'. "
-                "(Alias: response_format is also accepted.)"
-            ),
-            default=None,
-        ),
+        Literal["summary", "minimal", "full"] | None,
+        Field(description="(Alias for response_format; same values.)", default=None),
     ] = None,
     response_fields: Annotated[
         str | None,
         Field(
             description=(
-                "Comma-separated fields to include when return_mode='summary'. "
+                "Comma-separated fields to include when response_format='summary'. "
                 "Examples: key,summary,status,assignee,updated"
             ),
             default=None,
         ),
     ] = None,
     response_format: Annotated[
-        str | None,
-        Field(description="(Alias for return_mode.)", default=None),
+        Literal["summary", "minimal", "full"] | None,
+        Field(
+            description=(
+                "Canonical verbosity param. Response size: 'summary' (default — "
+                "key + url + a few shaped fields), 'minimal' (key + url + "
+                "message only), or 'full' (legacy: complete issue payload). Big "
+                "descriptions can blow past harness token limits on 'full'. "
+                "(Alias: return_mode is also accepted.)"
+            ),
+            default=None,
+        ),
     ] = None,
     key: Annotated[
         str | None,
