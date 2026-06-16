@@ -475,6 +475,47 @@ async def test_create_issue_additional_fields_non_dict_json(jira_client):
     assert "not a JSON object" in str(excinfo.value)
 
 
+@pytest.mark.anyio
+async def test_create_issue_bad_type_lists_valid_types(jira_client, mock_jira_fetcher):
+    """When create_issue fails because the project rejects the issue_type, the
+    error must list the project's creatable types so the agent self-corrects in
+    one shot (no jira_get discovery round-trips)."""
+    mock_jira_fetcher.create_issue.side_effect = ValueError(
+        "issue type Epic is not valid for project AI"
+    )
+    mock_jira_fetcher.get_project_issue_types.return_value = [
+        {"id": "1", "name": "Story"},
+        {"id": "2", "name": "Task"},
+        {"id": "3", "name": "Bug"},
+        {"id": "4", "name": "Sub-task"},
+    ]
+    with pytest.raises(ToolError) as excinfo:
+        await jira_client.call_tool(
+            "jira_create",
+            {"project_key": "AI", "summary": "X", "issue_type": "Epic", "force": True},
+        )
+    msg = str(excinfo.value)
+    # All valid types surfaced for self-correction.
+    for name in ("Story", "Task", "Bug", "Sub-task"):
+        assert name in msg
+    assert "AI" in msg
+    mock_jira_fetcher.get_project_issue_types.assert_called_once_with("AI")
+
+
+@pytest.mark.anyio
+async def test_create_issue_success_skips_issue_type_lookup(
+    jira_client, mock_jira_fetcher
+):
+    """Happy path must NOT pay the issue-type lookup round-trip — the enrich
+    step only runs when create_issue fails."""
+    response = await jira_client.call_tool(
+        "jira_create",
+        {"project_key": "TEST", "summary": "Fine", "issue_type": "Task"},
+    )
+    text_content = response.content[0]
+    content = json.loads(text_content.text)
+    assert content["message"] == "Issue created successfully"
+    mock_jira_fetcher.get_project_issue_types.assert_not_called()
 
 
 

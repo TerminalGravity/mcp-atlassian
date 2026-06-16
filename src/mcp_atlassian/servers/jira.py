@@ -242,6 +242,22 @@ def _find_recent_duplicate(jira: Any, project_key: str, summary: str) -> str | N
     return None
 
 
+def _project_issue_type_names(jira: Any, project_key: str) -> list[str]:
+    """Best-effort list of creatable issue-type names for a project. Returns
+    [] if it can't be determined (never raises). Only called when a create
+    actually fails, so the happy path pays no extra round-trip."""
+    try:
+        issue_types = jira.get_project_issue_types(project_key)
+        return [
+            str(it.get("name"))
+            for it in (issue_types or [])
+            if isinstance(it, dict) and it.get("name")
+        ]
+    except Exception as e:
+        logger.warning(f"create_issue issue-type lookup skipped: {e}")
+        return []
+
+
 TRUNC_HINT = '… [truncated — use response_format="full" for complete text]'
 
 
@@ -1541,15 +1557,30 @@ async def create(
                 }
             )
 
-    issue = jira.create_issue(
-        project_key=project_key,
-        summary=summary,
-        issue_type=issue_type,
-        description=description,
-        assignee=assignee,
-        components=components_list,
-        **extra_fields,
-    )
+    try:
+        issue = jira.create_issue(
+            project_key=project_key,
+            summary=summary,
+            issue_type=issue_type,
+            description=description,
+            assignee=assignee,
+            components=components_list,
+            **extra_fields,
+        )
+    except Exception as e:
+        # Enrich on failure only (no happy-path round-trip): if the issue_type
+        # was rejected, tell the agent which types the project actually accepts
+        # so it can self-correct in one shot instead of running discovery calls.
+        valid = _project_issue_type_names(jira, project_key)
+        hint = (
+            f" Valid issue types for {project_key}: {', '.join(valid)}."
+            if valid
+            else ""
+        )
+        raise ValueError(
+            f"Could not create issue with issue_type '{issue_type}' in "
+            f"{project_key}: {e}.{hint}"
+        ) from e
     return _operation_response(
         jira,
         message="Issue created successfully",
