@@ -41,6 +41,59 @@ def _parse_csv(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _norm_key_param(primary: str | None, *aliases: str | None) -> str | None:
+    """Return the first non-empty value — lets a tool accept any of several
+    parameter spellings for the same concept (kills keys/issue_key friction)."""
+    for v in (primary, *aliases):
+        if v:
+            return v
+    return None
+
+
+# Verbosity has two historical spellings across the surface: jira_get speaks
+# 'response_format' (summary|full); the write tools speak 'return_mode'
+# (summary|minimal|full). Each tool keeps its own canonical spelling but ALSO
+# accepts the other as an alias so an agent never has to remember which is
+# which. 'minimal' has no analogue on the summary|full axis, so it folds to
+# 'summary' when mapped onto a response_format target.
+_VERBOSITY_RETURN_MODE = {"summary", "minimal", "full"}
+_VERBOSITY_RESPONSE_FORMAT = {"summary", "full"}
+
+
+def _norm_return_mode(return_mode: str | None, response_format: str | None) -> str:
+    """Canonical verbosity for write tools (return_mode axis: summary|minimal|full).
+
+    Accepts a 'response_format' alias and validates the result so a bogus value
+    fails loudly rather than silently degrading.
+    """
+    value = _norm_key_param(return_mode, response_format) or "summary"
+    if value not in _VERBOSITY_RETURN_MODE:
+        raise ValueError(
+            f"Invalid return_mode '{value}'. "
+            f"Valid: {sorted(_VERBOSITY_RETURN_MODE)} "
+            "(response_format is accepted as an alias)."
+        )
+    return value
+
+
+def _norm_response_format(response_format: str | None, return_mode: str | None) -> str:
+    """Canonical verbosity for jira_get (response_format axis: summary|full).
+
+    Accepts a 'return_mode' alias; 'minimal' folds to 'summary' since the
+    read path only distinguishes summary vs full.
+    """
+    value = _norm_key_param(response_format, return_mode) or "summary"
+    if value == "minimal":
+        value = "summary"
+    if value not in _VERBOSITY_RESPONSE_FORMAT:
+        raise ValueError(
+            f"Invalid response_format '{value}'. "
+            f"Valid: {sorted(_VERBOSITY_RESPONSE_FORMAT)} "
+            "(return_mode is accepted as an alias; 'minimal' maps to 'summary')."
+        )
+    return value
+
+
 def _issue_url(jira: Any, issue_key: str) -> str:
     return f"{jira.config.url.rstrip('/')}/browse/{issue_key}"
 
@@ -335,18 +388,26 @@ async def get(
         ),
     ],
     response_format: Annotated[
-        str,
+        str | None,
         Field(
             description=(
-                "'summary' (default, ~1 KB/issue: triage fields + truncated "
-                "description + latest 2 comments truncated) or 'full' (complete "
-                "description and all fetched comments). summary answers "
-                "status/assignee/triage questions — request full only when you "
-                "need complete text."
+                "Canonical verbosity param. 'summary' (default, ~1 KB/issue: "
+                "triage fields + truncated description + latest 2 comments "
+                "truncated) or 'full' (complete description and all fetched "
+                "comments). summary answers status/assignee/triage questions — "
+                "request full only when you need complete text. (Alias: "
+                "return_mode is also accepted; 'minimal' maps to 'summary'.)"
             ),
-            default="summary",
+            default=None,
         ),
-    ] = "summary",
+    ] = None,
+    return_mode: Annotated[
+        str | None,
+        Field(
+            description="(Alias for response_format; 'minimal' maps to 'summary'.)",
+            default=None,
+        ),
+    ] = None,
     fields: Annotated[
         str,
         Field(
@@ -384,11 +445,15 @@ async def get(
     get_issue_dates / get_issue_sla. For finding issues by query, use jira_find.
     Re-fetching with summary format is cheap — don't hoard full payloads.
 
+    Verbosity is ``response_format`` (summary|full, canonical); ``return_mode`` is
+    accepted as an alias ('minimal' maps to 'summary').
+
     Returns:
         JSON object mapping each requested key to its issue card (or
         {"error": ...} for keys that failed — one bad key never fails the batch).
     """
     jira = await get_jira_fetcher(ctx)
+    response_format = _norm_response_format(response_format, return_mode)
     key_list = _parse_csv(keys) or []
     if not key_list:
         raise ValueError("keys is required (one key or comma-separated keys).")
@@ -635,12 +700,20 @@ async def transition(
         ),
     ] = None,
     return_mode: Annotated[
-        Literal["summary", "minimal", "full"],
+        str | None,
         Field(
-            description="'summary' (default), 'minimal', or 'full'. Single-key only.",
-            default="summary",
+            description=(
+                "Canonical verbosity param. 'summary' (default), 'minimal', or "
+                "'full'. Single-key only. (Alias: response_format is also "
+                "accepted.)"
+            ),
+            default=None,
         ),
-    ] = "summary",
+    ] = None,
+    response_format: Annotated[
+        str | None,
+        Field(description="(Alias for return_mode.)", default=None),
+    ] = None,
 ) -> dict:
     """Move one or many Jira issues to a new status by NAME.
 
@@ -652,6 +725,7 @@ async def transition(
     {target, summary: {ok, fail, total}, results: [...]}.
     """
     jira = await get_jira_fetcher(ctx)
+    return_mode = _norm_return_mode(return_mode, response_format)
     key_list = _parse_csv(keys) or []
     if not key_list:
         raise ValueError("keys is required.")
@@ -713,18 +787,28 @@ async def transition(
 @check_write_access
 async def comment(
     ctx: Context,
-    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g., 'PROJ-123'). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
     body: Annotated[
-        str,
+        str | None,
         Field(
             description=(
                 "Comment body. Atlassian Wiki is the canonical syntax "
                 "(*bold*, {code}...{code}, h2. heading). Input is always run "
                 "through the Markdown→Wiki preprocessor; format only gates the "
                 "Markdown-leakage warning."
-            )
+            ),
+            default=None,
         ),
-    ],
+    ] = None,
     comment_id: Annotated[
         str | None,
         Field(
@@ -751,6 +835,14 @@ async def comment(
             default="auto",
         ),
     ] = "auto",
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
 ) -> dict:
     """Add or edit a comment on a Jira issue.
 
@@ -759,8 +851,16 @@ async def comment(
     Markdown-leakage warning. The response's body_preview is the STORED body
     post-conversion — verify rendering from it; do NOT follow up with a
     jira_get call to check the comment.
+
+    The issue identifier is ``issue_key`` (canonical); ``key`` and ``keys`` are
+    accepted as aliases so callers needn't remember which spelling this tool wants.
     """
     jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required.")
+    if not body:
+        raise ValueError("body is required.")
     warnings: list[str] = []
     if format == "auto":
         markers: list[str] = []
@@ -830,8 +930,15 @@ def _link_type_dicts(jira: Any) -> list[dict[str, Any]]:
 async def link(
     ctx: Context,
     issue_key: Annotated[
-        str, Field(description="The issue being linked FROM (e.g. 'DS-123').")
-    ],
+        str | None,
+        Field(
+            description=(
+                "The issue being linked FROM (e.g. 'DS-123'). Canonical param; "
+                "'key' and 'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
     to: Annotated[
         str | None,
         Field(
@@ -871,6 +978,14 @@ async def link(
         str | None,
         Field(description="(remove=true) The issue-link id to delete.", default=None),
     ] = None,
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
 ) -> dict:
     """Create or remove any kind of Jira link.
 
@@ -884,8 +999,12 @@ async def link(
     FROM issue), and a human-readable ``message``. Web links carry only
     url + title — the legacy tool's relationship/icon/summary fields are
     intentionally dropped.
+
+    The FROM issue is ``issue_key`` (canonical); ``key`` and ``keys`` are
+    accepted as aliases.
     """
     jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
 
     if remove:
         if not link_id:
@@ -893,6 +1012,8 @@ async def link(
         result = jira.remove_issue_link(link_id)
         return _json(result if isinstance(result, dict) else {"success": True})
 
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required when creating a link.")
     if not to or not link_type:
         raise ValueError("to and link_type are required when creating a link.")
 
@@ -977,7 +1098,16 @@ async def link(
 @check_write_access
 async def worklog(
     ctx: Context,
-    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g., 'PROJ-123'). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
     time_spent: Annotated[
         str | None,
         Field(
@@ -1005,12 +1135,24 @@ async def worklog(
         str | None,
         Field(description="(Optional, add) New remaining estimate.", default=None),
     ] = None,
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
 ) -> dict:
     """Read worklogs (no time_spent) or add one (time_spent given).
 
-    Replaces get_worklog / add_worklog.
+    Replaces get_worklog / add_worklog. The issue identifier is ``issue_key``
+    (canonical); ``key`` and ``keys`` are accepted as aliases.
     """
     jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required.")
     if time_spent is None:
         worklogs = jira.get_worklogs(issue_key)
         return _json({"key": issue_key, "worklogs": worklogs})
@@ -1449,18 +1591,19 @@ async def create(
         ),
     ] = None,
     return_mode: Annotated[
-        str,
+        str | None,
         Field(
             description=(
-                "Response size: 'summary' (default — key + url + a few shaped "
-                "fields), 'minimal' (key + url + message only), or 'full' "
-                "(legacy: complete issue payload). New tickets created via "
-                "this tool are small by definition, but consistency with the "
-                "other write tools keeps callers' code uniform."
+                "Canonical verbosity param. Response size: 'summary' (default — "
+                "key + url + a few shaped fields), 'minimal' (key + url + "
+                "message only), or 'full' (legacy: complete issue payload). New "
+                "tickets created via this tool are small by definition, but "
+                "consistency with the other write tools keeps callers' code "
+                "uniform. (Alias: response_format is also accepted.)"
             ),
-            default="summary",
+            default=None,
         ),
-    ] = "summary",
+    ] = None,
     response_fields: Annotated[
         str | None,
         Field(
@@ -1470,6 +1613,10 @@ async def create(
             ),
             default=None,
         ),
+    ] = None,
+    response_format: Annotated[
+        str | None,
+        Field(description="(Alias for return_mode.)", default=None),
     ] = None,
     force: Annotated[
         bool,
@@ -1513,6 +1660,7 @@ async def create(
         ValueError: If in read-only mode or Jira client is unavailable.
     """
     jira = await get_jira_fetcher(ctx)
+    return_mode = _norm_return_mode(return_mode, response_format)
     # Parse components from comma-separated string to list
     components_list = None
     if components and isinstance(components, str):
@@ -1597,16 +1745,26 @@ async def create(
 @check_write_access
 async def update(
     ctx: Context,
-    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g., 'PROJ-123'). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
     fields: Annotated[
-        dict[str, Any],
+        dict[str, Any] | None,
         Field(
             description=(
                 "Dictionary of fields to update. For 'assignee', provide a string identifier (email, name, or accountId). "
                 "Example: `{'assignee': 'user@example.com', 'summary': 'New Summary'}`"
-            )
+            ),
+            default=None,
         ),
-    ],
+    ] = None,
     additional_fields: Annotated[
         dict[str, Any] | None,
         Field(
@@ -1625,17 +1783,18 @@ async def update(
         ),
     ] = None,
     return_mode: Annotated[
-        str,
+        str | None,
         Field(
             description=(
-                "Response size: 'summary' (default — key + url + a few shaped "
-                "fields), 'minimal' (key + url + message only), or 'full' "
-                "(legacy: complete issue payload). Big descriptions can blow "
-                "past harness token limits on 'full'."
+                "Canonical verbosity param. Response size: 'summary' (default — "
+                "key + url + a few shaped fields), 'minimal' (key + url + "
+                "message only), or 'full' (legacy: complete issue payload). Big "
+                "descriptions can blow past harness token limits on 'full'. "
+                "(Alias: response_format is also accepted.)"
             ),
-            default="summary",
+            default=None,
         ),
-    ] = "summary",
+    ] = None,
     response_fields: Annotated[
         str | None,
         Field(
@@ -1646,17 +1805,29 @@ async def update(
             default=None,
         ),
     ] = None,
+    response_format: Annotated[
+        str | None,
+        Field(description="(Alias for return_mode.)", default=None),
+    ] = None,
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
 ) -> dict:
     """Update an existing Jira issue including changing status, adding Epic links, updating fields, etc.
 
     Args:
         ctx: The FastMCP context.
-        issue_key: Jira issue key.
+        issue_key: Jira issue key (canonical; 'key'/'keys' accepted as aliases).
         fields: Dictionary of fields to update.
         additional_fields: Optional dictionary of additional fields.
         attachments: Optional JSON array string or comma-separated list of file paths.
         return_mode: Response payload size — 'summary' (default), 'minimal',
-            or 'full'.
+            or 'full' (canonical; 'response_format' accepted as an alias).
         response_fields: Optional comma-separated field allowlist when
             return_mode='summary'.
 
@@ -1669,6 +1840,10 @@ async def update(
         ValueError: If in read-only mode or Jira client unavailable, or invalid input.
     """
     jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required.")
+    return_mode = _norm_return_mode(return_mode, response_format)
     # Use fields directly as dict
     if not isinstance(fields, dict):
         raise ValueError("fields must be a dictionary.")
@@ -1738,18 +1913,36 @@ async def update(
 @check_write_access
 async def assign(
     ctx: Context,
-    issue_key: Annotated[str, Field(description="Jira issue key (e.g., 'PROJ-123')")],
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g., 'PROJ-123'). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
     assignee: Annotated[
-        str,
+        str | None,
         Field(
             description=(
                 "Assignee identifier — email, displayName, or accountId. "
                 "Pass an empty string to unassign. The tool resolves "
                 "email/displayName to the correct accountId (Cloud) or "
                 "username (Server/DC) before the write."
-            )
+            ),
+            default=None,
         ),
-    ],
+    ] = None,
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
 ) -> dict:
     """Set the assignee on a Jira issue with a minimal response payload.
 
@@ -1761,7 +1954,7 @@ async def assign(
 
     Args:
         ctx: The FastMCP context.
-        issue_key: Jira issue key.
+        issue_key: Jira issue key (canonical; 'key'/'keys' accepted as aliases).
         assignee: Email, displayName, or accountId. Empty string unassigns.
 
     Returns:
@@ -1782,8 +1975,11 @@ async def assign(
             unavailable.
     """
     jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
     if not issue_key:
-        raise ValueError("issue_key is required.")
+        raise ValueError("issue_key (or key) is required.")
+    if assignee is None:
+        raise ValueError("assignee is required (pass an empty string to unassign).")
     # ``assignee`` is allowed to be the empty string (unassign).
 
     try:
@@ -1815,13 +2011,30 @@ async def assign(
 @check_write_access
 async def delete(
     ctx: Context,
-    issue_key: Annotated[str, Field(description="Jira issue key (e.g. PROJ-123)")],
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g. PROJ-123). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
 ) -> dict:
     """Delete an existing Jira issue.
 
     Args:
         ctx: The FastMCP context.
-        issue_key: Jira issue key.
+        issue_key: Jira issue key (canonical; 'key'/'keys' accepted as aliases).
 
     Returns:
         JSON string indicating success.
@@ -1830,6 +2043,9 @@ async def delete(
         ValueError: If in read-only mode or Jira client unavailable.
     """
     jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required.")
     success = jira.delete_issue(issue_key)
     result = {
         "success": success,
