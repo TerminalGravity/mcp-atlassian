@@ -1529,3 +1529,217 @@ async def test_jira_projects_user_lookup_error_returns_failure(
     assert content["success"] is False
     assert "error" in content
     assert content["user_identifier"] == "nonexistent@example.com"
+
+
+# === Part 4 — key/verbosity parameter aliases (no keys/issue_key friction) ===
+#
+# The single-issue write tools accept the issue identifier under any of
+# `issue_key` (canonical), `key`, or `keys`. The verbosity param is accepted
+# under both `return_mode` (write tools) and `response_format` (jira_get), with
+# each tool keeping its own canonical spelling.
+
+
+@pytest.mark.anyio
+async def test_jira_update_accepts_keys_alias(jira_client, mock_jira_fetcher):
+    """jira_update with `keys=` works the same as `issue_key=`."""
+    mock_issue = MagicMock()
+    mock_issue.to_simplified_dict.return_value = {"key": "TEST-1", "summary": "x"}
+    mock_jira_fetcher.update_issue.return_value = mock_issue
+
+    response = await jira_client.call_tool(
+        "jira_update", {"keys": "TEST-1", "fields": {"summary": "x"}}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-1"
+    mock_jira_fetcher.update_issue.assert_called_once_with(
+        issue_key="TEST-1", summary="x"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_update_accepts_key_alias(jira_client, mock_jira_fetcher):
+    """jira_update with `key=` works the same as `issue_key=`."""
+    mock_issue = MagicMock()
+    mock_issue.to_simplified_dict.return_value = {"key": "TEST-2", "summary": "y"}
+    mock_jira_fetcher.update_issue.return_value = mock_issue
+
+    response = await jira_client.call_tool(
+        "jira_update", {"key": "TEST-2", "fields": {"summary": "y"}}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-2"
+    mock_jira_fetcher.update_issue.assert_called_once_with(
+        issue_key="TEST-2", summary="y"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_update_response_format_aliases_return_mode(
+    jira_client, mock_jira_fetcher
+):
+    """response_format='full' behaves like return_mode='full' (full payload)."""
+    full_payload = {"key": "TEST-3", "summary": "s", "description": "big body"}
+    mock_issue = MagicMock()
+    mock_issue.to_simplified_dict.return_value = full_payload
+    mock_jira_fetcher.update_issue.return_value = mock_issue
+
+    via_alias = await jira_client.call_tool(
+        "jira_update",
+        {"issue_key": "TEST-3", "fields": {"summary": "s"}, "response_format": "full"},
+    )
+    via_canonical = await jira_client.call_tool(
+        "jira_update",
+        {"issue_key": "TEST-3", "fields": {"summary": "s"}, "return_mode": "full"},
+    )
+    alias_content = json.loads(via_alias.content[0].text)
+    canonical_content = json.loads(via_canonical.content[0].text)
+    # response_format='full' must produce the identical payload as
+    # return_mode='full' — and 'full' surfaces the description (dropped in
+    # the default 'summary' shaping).
+    assert alias_content == canonical_content
+    assert alias_content["issue"]["description"] == "big body"
+
+
+@pytest.mark.anyio
+async def test_jira_update_rejects_missing_key(jira_client):
+    """No issue identifier under any spelling must fail loudly."""
+    with pytest.raises(Exception, match="issue_key"):
+        await jira_client.call_tool("jira_update", {"fields": {"summary": "s"}})
+
+
+@pytest.mark.anyio
+async def test_jira_comment_accepts_key_alias(jira_client, mock_jira_fetcher):
+    """jira_comment with `key=` works the same as `issue_key=`."""
+    mock_jira_fetcher.add_comment.return_value = {
+        "id": "1",
+        "body": "hello",
+        "created": "c",
+    }
+    response = await jira_client.call_tool(
+        "jira_comment", {"key": "TEST-9", "body": "hello"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    # the resolved key flows into the comment URL
+    assert "TEST-9" in content["url"]
+    mock_jira_fetcher.add_comment.assert_called_once()
+    assert mock_jira_fetcher.add_comment.call_args.args[0] == "TEST-9"
+
+
+@pytest.mark.anyio
+async def test_jira_assign_accepts_keys_alias(jira_client, mock_jira_fetcher):
+    """jira_assign with `keys=` works the same as `issue_key=`."""
+    mock_jira_fetcher.assign_issue.return_value = ("Old", "New")
+    response = await jira_client.call_tool(
+        "jira_assign", {"keys": "TEST-5", "assignee": "new@example.com"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-5"
+    mock_jira_fetcher.assign_issue.assert_called_once_with("TEST-5", "new@example.com")
+
+
+@pytest.mark.anyio
+async def test_jira_delete_accepts_key_alias(jira_client, mock_jira_fetcher):
+    """jira_delete with `key=` works the same as `issue_key=`."""
+    mock_jira_fetcher.delete_issue.return_value = True
+    response = await jira_client.call_tool("jira_delete", {"key": "TEST-6"})
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    mock_jira_fetcher.delete_issue.assert_called_once_with("TEST-6")
+
+
+@pytest.mark.anyio
+async def test_jira_worklog_accepts_keys_alias(jira_client, mock_jira_fetcher):
+    """jira_worklog read path with `keys=` works the same as `issue_key=`."""
+    mock_jira_fetcher.get_worklogs.return_value = [{"id": "1", "timeSpent": "1h"}]
+    response = await jira_client.call_tool("jira_worklog", {"keys": "TEST-7"})
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-7"
+    mock_jira_fetcher.get_worklogs.assert_called_once_with("TEST-7")
+
+
+@pytest.mark.anyio
+async def test_jira_link_accepts_key_alias(jira_client, mock_jira_fetcher):
+    """jira_link with `key=` works the same as `issue_key=`."""
+    response = await jira_client.call_tool(
+        "jira_link",
+        {"key": "TEST-8", "to": "TEST-100", "link_type": "epic"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-8"
+    mock_jira_fetcher.link_issue_to_epic.assert_called_once_with("TEST-8", "TEST-100")
+
+
+@pytest.mark.anyio
+async def test_jira_create_response_format_aliases_return_mode(
+    jira_client, mock_jira_fetcher
+):
+    """jira_create accepts response_format as an alias for return_mode."""
+    via_alias = await jira_client.call_tool(
+        "jira_create",
+        {
+            "project_key": "TEST",
+            "summary": "Aliased create",
+            "issue_type": "Task",
+            "response_format": "minimal",
+            "force": True,
+        },
+    )
+    via_canonical = await jira_client.call_tool(
+        "jira_create",
+        {
+            "project_key": "TEST",
+            "summary": "Aliased create",
+            "issue_type": "Task",
+            "return_mode": "minimal",
+            "force": True,
+        },
+    )
+    alias_content = json.loads(via_alias.content[0].text)
+    canonical_content = json.loads(via_canonical.content[0].text)
+    assert alias_content["key"]
+    # response_format alias must produce the same shape as canonical return_mode
+    assert alias_content == canonical_content
+
+
+@pytest.mark.anyio
+async def test_jira_get_accepts_return_mode_alias(jira_client, mock_jira_fetcher):
+    """jira_get accepts return_mode as an alias for response_format."""
+    response = await jira_client.call_tool(
+        "jira_get", {"keys": "TEST-123", "return_mode": "full"}
+    )
+    content = json.loads(response.content[0].text)
+    assert "TEST-123" in content
+    assert content["TEST-123"]["key"] == "TEST-123"
+
+
+@pytest.mark.anyio
+async def test_jira_get_return_mode_minimal_maps_to_summary(
+    jira_client, mock_jira_fetcher
+):
+    """'minimal' has no read analogue, so it folds to summary (no error)."""
+    response = await jira_client.call_tool(
+        "jira_get", {"keys": "TEST-123", "return_mode": "minimal"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["TEST-123"]["key"] == "TEST-123"
+
+
+@pytest.mark.anyio
+async def test_jira_transition_response_format_aliases_return_mode(
+    jira_client, mock_jira_fetcher
+):
+    """jira_transition accepts response_format as an alias for return_mode."""
+    mock_jira_fetcher.get_available_transitions.return_value = [
+        {"id": "41", "name": "Done", "to_status": "Done"},
+    ]
+    mock_issue = MagicMock()
+    mock_issue.to_simplified_dict.return_value = {"key": "TEST-123", "summary": "s"}
+    mock_jira_fetcher.transition_issue.return_value = mock_issue
+    # Should not raise on the aliased verbosity param.
+    response = await jira_client.call_tool(
+        "jira_transition",
+        {"keys": "TEST-123", "to_status": "Done", "response_format": "minimal"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["key"] == "TEST-123"
