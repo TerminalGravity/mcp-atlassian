@@ -744,3 +744,115 @@ class TestAttachmentsMixin:
         # Assertions
         assert result["success"] is False
         assert "No issue key provided" in result["error"]
+
+    def test_upload_attachment_content_success(
+        self, attachments_mixin: AttachmentsMixin
+    ):
+        """Inline base64 content is decoded, written under the given filename,
+        uploaded, and the temp file is cleaned up afterwards."""
+        import base64
+
+        attachments_mixin.jira.add_attachment.return_value = {"id": "999"}
+
+        # Capture the temp path used so we can assert it was cleaned up.
+        used_paths: list[str] = []
+
+        def _capture(issue_key, filename):
+            used_paths.append(filename)
+            return {"id": "999"}
+
+        attachments_mixin.jira.add_attachment.side_effect = _capture
+
+        content_b64 = base64.b64encode(b"hello world").decode("ascii")
+        result = attachments_mixin.upload_attachment_content(
+            "TEST-123", "report.txt", content_b64
+        )
+
+        assert result["success"] is True
+        assert result["issue_key"] == "TEST-123"
+        assert result["filename"] == "report.txt"
+        assert result["size"] == len(b"hello world")
+        assert result["id"] == "999"
+        # The path uploaded ends with the requested basename...
+        assert used_paths and used_paths[0].endswith("report.txt")
+        # ...and the temp file/dir is removed after the upload.
+        import os
+
+        assert not os.path.exists(used_paths[0])
+
+    def test_upload_attachment_content_bad_base64(
+        self, attachments_mixin: AttachmentsMixin
+    ):
+        """Malformed base64 returns a clear error and never hits the API."""
+        result = attachments_mixin.upload_attachment_content(
+            "TEST-123", "report.txt", "not!!valid@@base64"
+        )
+
+        assert result["success"] is False
+        assert "Invalid base64" in result["error"]
+        attachments_mixin.jira.add_attachment.assert_not_called()
+
+    def test_upload_attachment_content_requires_filename(
+        self, attachments_mixin: AttachmentsMixin
+    ):
+        """Missing filename is rejected before any decode/upload."""
+        result = attachments_mixin.upload_attachment_content("TEST-123", "", "Zm9v")
+
+        assert result["success"] is False
+        assert "No filename provided" in result["error"]
+        attachments_mixin.jira.add_attachment.assert_not_called()
+
+    def test_list_attachments_success(self, attachments_mixin: AttachmentsMixin):
+        """list_attachments returns simplified metadata for each attachment."""
+        attachments_mixin.jira.issue.return_value = {
+            "fields": {
+                "attachment": [
+                    {
+                        "id": "1",
+                        "filename": "a.txt",
+                        "size": 10,
+                        "mimeType": "text/plain",
+                        "created": "2024-01-01T00:00:00.000+0000",
+                        "content": "https://jira.example.com/a.txt",
+                    },
+                    {
+                        "id": "2",
+                        "filename": "b.pdf",
+                        "size": 20,
+                        "mimeType": "application/pdf",
+                        "created": "2024-01-02T00:00:00.000+0000",
+                        "content": "https://jira.example.com/b.pdf",
+                    },
+                ]
+            }
+        }
+
+        result = attachments_mixin.list_attachments("TEST-123")
+
+        assert result["success"] is True
+        assert result["issue_key"] == "TEST-123"
+        assert result["total"] == 2
+        filenames = {a["filename"] for a in result["attachments"]}
+        assert filenames == {"a.txt", "b.pdf"}
+        assert result["attachments"][0]["url"] == "https://jira.example.com/a.txt"
+        attachments_mixin.jira.issue.assert_called_once_with(
+            "TEST-123", fields="attachment"
+        )
+
+    def test_list_attachments_empty(self, attachments_mixin: AttachmentsMixin):
+        """An issue with no attachments lists zero."""
+        attachments_mixin.jira.issue.return_value = {"fields": {"attachment": []}}
+
+        result = attachments_mixin.list_attachments("TEST-123")
+
+        assert result["success"] is True
+        assert result["total"] == 0
+        assert result["attachments"] == []
+
+    def test_list_attachments_no_issue_key(self, attachments_mixin: AttachmentsMixin):
+        """Missing issue key returns an error without an API call."""
+        result = attachments_mixin.list_attachments("")
+
+        assert result["success"] is False
+        assert "No issue key provided" in result["error"]
+        attachments_mixin.jira.issue.assert_not_called()

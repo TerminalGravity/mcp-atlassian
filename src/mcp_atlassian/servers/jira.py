@@ -41,6 +41,26 @@ def _parse_csv(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _parse_path_list(value: str | None) -> list[str]:
+    """Parse a file-path list given as a JSON array string or a comma-separated
+    string. Returns [] for empty input. Shared by jira_update (attachments) and
+    jira_attach (upload) so both accept the same spellings."""
+    if not value:
+        return []
+    if not isinstance(value, str):
+        raise ValueError(
+            "file paths must be a JSON array string or comma-separated string."
+        )
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        # Not JSON — treat as comma-separated.
+        return [p.strip() for p in value.split(",") if p.strip()]
+    if isinstance(parsed, list):
+        return [str(p) for p in parsed]
+    raise ValueError("file paths JSON string must be an array.")
+
+
 def _norm_key_param(primary: str | None, *aliases: str | None) -> str | None:
     """Return the first non-empty value — lets a tool accept any of several
     parameter spellings for the same concept (kills keys/issue_key friction)."""
@@ -1170,71 +1190,6 @@ async def worklog(
 
 
 @jira_mcp.tool(
-    tags={"jira", "write"},
-    annotations={"title": "Attach File", "destructiveHint": True},
-)
-@check_write_access
-async def attach(
-    ctx: Context,
-    issue_key: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Jira issue key (e.g. 'PROJ-123'). Canonical param; 'key' and "
-                "'keys' are accepted as aliases."
-            ),
-            default=None,
-        ),
-    ] = None,
-    file_path: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Absolute path of the file to attach. Comma-separated for "
-                "multiple files in one call."
-            ),
-            default=None,
-        ),
-    ] = None,
-    key: Annotated[
-        str | None, Field(description="(Alias for issue_key.)", default=None)
-    ] = None,
-    keys: Annotated[
-        str | None, Field(description="(Alias for issue_key.)", default=None)
-    ] = None,
-) -> dict:
-    """Upload one or more file attachments to a Jira issue.
-
-    file_path takes a single absolute path, or comma-separated paths for
-    multiple files. Per-file results carry success/filename/size/id; a missing
-    file returns {success: false, error: ...} for that file rather than raising,
-    so one bad path never aborts the rest.
-    """
-    jira = await get_jira_fetcher(ctx)
-    issue_key = _norm_key_param(issue_key, key, keys)
-    if not issue_key:
-        raise ValueError("issue_key (or key) is required.")
-    if not file_path:
-        raise ValueError("file_path is required (one path or comma-separated paths).")
-
-    paths = _parse_csv(file_path) or []
-    if len(paths) == 1:
-        return _json(jira.upload_attachment(issue_key=issue_key, file_path=paths[0]))
-
-    results = [
-        jira.upload_attachment(issue_key=issue_key, file_path=p) for p in paths
-    ]
-    ok = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
-    return _json(
-        {
-            "key": issue_key,
-            "summary": {"ok": ok, "fail": len(results) - ok, "total": len(results)},
-            "results": results,
-        }
-    )
-
-
-@jira_mcp.tool(
     tags={"jira", "read"},
     annotations={"title": "Agile (Boards & Sprints)"},
 )
@@ -1890,7 +1845,9 @@ async def update(
         issue_key: Jira issue key (canonical; 'key'/'keys' accepted as aliases).
         fields: Dictionary of fields to update.
         additional_fields: Optional dictionary of additional fields.
-        attachments: Optional JSON array string or comma-separated list of file paths.
+        attachments: Optional JSON array string or comma-separated list of file
+            paths. Kept for backward compatibility; prefer jira_attach for
+            attachment uploads (it also accepts inline base64 content).
         return_mode: Response payload size — 'summary' (default), 'minimal',
             or 'full' (canonical; 'response_format' accepted as an alias).
         response_fields: Optional comma-separated field allowlist when
@@ -1919,25 +1876,9 @@ async def update(
     if not isinstance(extra_fields, dict):
         raise ValueError("additional_fields must be a dictionary.")
 
-    # Parse attachments
-    attachment_paths = []
-    if attachments:
-        if isinstance(attachments, str):
-            try:
-                parsed = json.loads(attachments)
-                if isinstance(parsed, list):
-                    attachment_paths = [str(p) for p in parsed]
-                else:
-                    raise ValueError("attachments JSON string must be an array.")
-            except json.JSONDecodeError:
-                # Assume comma-separated if not valid JSON array
-                attachment_paths = [
-                    p.strip() for p in attachments.split(",") if p.strip()
-                ]
-        else:
-            raise ValueError(
-                "attachments must be a JSON array string or comma-separated string."
-            )
+    # Parse attachments (jira_attach is the canonical attachment tool; this
+    # param is kept for backward compatibility).
+    attachment_paths = _parse_path_list(attachments)
 
     # Combine fields and additional_fields
     all_updates = {**update_fields, **extra_fields}
@@ -1965,6 +1906,174 @@ async def update(
     except Exception as e:
         logger.error(f"Error updating issue {issue_key}: {str(e)}", exc_info=True)
         raise ValueError(f"Failed to update issue {issue_key}: {str(e)}")
+
+
+@jira_mcp.tool(
+    tags={"jira", "read"},
+    annotations={"title": "Issue Attachments", "destructiveHint": False},
+)
+async def attach(
+    ctx: Context,
+    issue_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Jira issue key (e.g., 'PROJ-123'). Canonical param; 'key' and "
+                "'keys' are accepted as aliases."
+            ),
+            default=None,
+        ),
+    ] = None,
+    action: Annotated[
+        Literal["upload", "download", "list"],
+        Field(
+            description=(
+                "What to do: 'upload' a file (write), 'download' all attachments "
+                "to a local directory, or 'list' attachment metadata."
+            ),
+            default="upload",
+        ),
+    ] = "upload",
+    file_paths: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(upload) JSON array string or comma-separated list of local file "
+                "paths to attach. Example: '/tmp/a.png,/tmp/b.pdf' or "
+                '\'["/tmp/a.png","/tmp/b.pdf"]\'. Files must exist on the host '
+                "running the MCP server."
+            ),
+            default=None,
+        ),
+    ] = None,
+    file_path: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(upload) Alias for file_paths — a single path, or a "
+                "comma-separated/JSON-array list, also works here."
+            ),
+            default=None,
+        ),
+    ] = None,
+    content: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(upload) Base64-encoded file content to attach inline, instead "
+                "of a path on disk. Requires 'filename'."
+            ),
+            default=None,
+        ),
+    ] = None,
+    filename: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(upload) The name the attachment should have in Jira. Required "
+                "when 'content' is provided."
+            ),
+            default=None,
+        ),
+    ] = None,
+    target_dir: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(download) Local directory where attachments are saved (created "
+                "if missing). Required for action='download'."
+            ),
+            default=None,
+        ),
+    ] = None,
+    key: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key.)", default=None),
+    ] = None,
+    keys: Annotated[
+        str | None,
+        Field(description="(Alias for issue_key — single key.)", default=None),
+    ] = None,
+) -> dict:
+    """Manage attachments on a Jira issue: upload, download, or list.
+
+    A single consolidated tool for per-issue attachment operations. Uploads
+    accept either local file paths or inline base64 content (handy when content
+    was generated in-memory and never written to disk).
+
+    Args:
+        ctx: The FastMCP context.
+        issue_key: Jira issue key (canonical; 'key'/'keys' accepted as aliases).
+        action: 'upload' (write), 'download', or 'list'.
+        file_paths: (upload) JSON array string or comma-separated local paths.
+            ('file_path' is accepted as a singular alias.)
+        content: (upload) Base64-encoded inline content; requires 'filename'.
+        filename: (upload) Attachment name for inline 'content'.
+        target_dir: (download) Local directory to save attachments into.
+
+    Returns:
+        A dict with the operation result: per-file uploaded/failed lists for
+        'upload', downloaded/failed lists for 'download', or attachment
+        metadata for 'list'. Includes the issue URL.
+
+    Raises:
+        ValueError: On read-only mode (upload), missing issue_key, or missing
+            inputs for the requested action.
+    """
+    jira = await get_jira_fetcher(ctx)
+    issue_key = _norm_key_param(issue_key, key, keys)
+    if not issue_key:
+        raise ValueError("issue_key (or key) is required.")
+
+    if action == "list":
+        return _json(jira.list_attachments(issue_key))
+
+    if action == "download":
+        if not target_dir:
+            raise ValueError("target_dir is required for action='download'.")
+        return _json(jira.download_issue_attachments(issue_key, target_dir))
+
+    # action == "upload"
+    require_write_access(ctx, "upload attachments")
+    # file_path is a singular alias for file_paths; both accept CSV/JSON lists.
+    paths = _parse_path_list(file_paths) + _parse_path_list(file_path)
+    has_inline = bool(content)
+    if not paths and not has_inline:
+        raise ValueError("Provide file_paths and/or content (with filename) to upload.")
+
+    uploaded: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    if paths:
+        result = jira.upload_attachments(issue_key, paths)
+        uploaded.extend(result.get("uploaded", []))
+        failed.extend(result.get("failed", []))
+
+    if has_inline:
+        if not filename:
+            raise ValueError("filename is required when content is provided.")
+        result = jira.upload_attachment_content(issue_key, filename, content)
+        if result.get("success"):
+            uploaded.append(
+                {
+                    "filename": result.get("filename"),
+                    "size": result.get("size"),
+                    "id": result.get("id"),
+                }
+            )
+        else:
+            failed.append({"filename": filename, "error": result.get("error")})
+
+    return _json(
+        {
+            "success": True,
+            "issue_key": issue_key,
+            "url": _issue_url(jira, issue_key),
+            "total": len(uploaded) + len(failed),
+            "uploaded": uploaded,
+            "failed": failed,
+        }
+    )
 
 
 @jira_mcp.tool(

@@ -41,6 +41,7 @@ This MCP server provides semantic search and direct Jira access. Use it to:
 - `jira_agile` - Boards, sprints, sprint issues, create/update sprints (`action=boards|sprints|sprint_issues|create_sprint|update_sprint`)
 - `jira_handoff` - Compact resumable state snapshot for context resets
 - `jira_worklog` - Read or add worklogs on an issue
+- `jira_attach` - Manage issue attachments (`action=upload|download|list`); upload via local file paths or inline base64 content
 
 ### Knowledge Tools
 - `jira_knowledge` - Natural-language Q&A over the synced vector index

@@ -256,14 +256,17 @@ class ProjectsMixin(JiraClient, SearchOperationsProto):
                 logger.error(msg)
                 raise TypeError(msg)
 
-            issue_types = []
-            # Extract issue types from createmeta response
-            if "projects" in meta and len(meta["projects"]) > 0:
-                project_data = meta["projects"][0]
-                if "issuetypes" in project_data:
-                    issue_types = project_data["issuetypes"]
+            # The paged createmeta/{project}/issuetypes endpoint returns the
+            # list under "values" (Jira Cloud) or "issueTypes". Fall back to the
+            # legacy global-createmeta shape ({"projects": [{"issuetypes": …}]})
+            # so older/Server responses still parse.
+            issue_types = meta.get("values") or meta.get("issueTypes")
+            if not issue_types:
+                projects = meta.get("projects")
+                if isinstance(projects, list) and projects:
+                    issue_types = projects[0].get("issuetypes")
 
-            return issue_types
+            return issue_types if isinstance(issue_types, list) else []
 
         except Exception as e:
             logger.error(

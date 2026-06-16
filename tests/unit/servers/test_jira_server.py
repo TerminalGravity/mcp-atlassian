@@ -274,13 +274,41 @@ def test_jira_mcp(mock_jira_fetcher, mock_base_jira_config):
         "TestJira", instructions="Test Jira MCP Server", lifespan=test_lifespan
     )
     from src.mcp_atlassian.servers.jira import (
-        agile, assign, attach, comment, create, delete, find, get, handoff,
-        link, projects, transition, update, versions, worklog,
+        agile,
+        assign,
+        attach,
+        comment,
+        create,
+        delete,
+        find,
+        get,
+        handoff,
+        link,
+        projects,
+        transition,
+        update,
+        versions,
+        worklog,
     )
 
     jira_sub_mcp = FastMCP(name="TestJiraSubMCP")
-    for _tool in (agile, assign, attach, comment, create, delete, find, get,
-                  handoff, link, projects, transition, update, versions, worklog):
+    for _tool in (
+        agile,
+        assign,
+        attach,
+        comment,
+        create,
+        delete,
+        find,
+        get,
+        handoff,
+        link,
+        projects,
+        transition,
+        update,
+        versions,
+        worklog,
+    ):
         jira_sub_mcp.add_tool(_tool)
     test_mcp.mount(jira_sub_mcp, prefix="jira")
     return test_mcp
@@ -348,10 +376,6 @@ async def no_fetcher_client_fixture(no_fetcher_test_jira_mcp, mock_request):
         transport=FastMCPTransport(no_fetcher_test_jira_mcp)
     ) as client_for_no_fetcher:
         yield client_for_no_fetcher
-
-
-
-
 
 
 @pytest.mark.anyio
@@ -518,12 +542,6 @@ async def test_create_issue_success_skips_issue_type_lookup(
     mock_jira_fetcher.get_project_issue_types.assert_not_called()
 
 
-
-
-
-
-
-
 @pytest.mark.anyio
 async def test_no_fetcher_get_issue(no_fetcher_client_fixture, mock_request):
     """Test that get_issue fails when Jira client is not configured (global config missing)."""
@@ -605,37 +623,9 @@ async def test_get_issue_with_user_specific_fetcher_in_state(
     assert result_data["USER-STATE-1"]["key"] == "USER-STATE-1"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --- v2 surface: jira_get -------------------------------------------------
 
-from src.mcp_atlassian.servers.jira import _issue_card, _truncate_tagged, TRUNC_HINT
+from src.mcp_atlassian.servers.jira import TRUNC_HINT, _issue_card, _truncate_tagged
 
 
 class _StubIssue:
@@ -803,9 +793,7 @@ async def test_jira_get_per_key_isolation(jira_client, mock_jira_fetcher):
 
     mock_jira_fetcher.get_issue.side_effect = mock_get_issue_one_bad
 
-    response = await jira_client.call_tool(
-        "jira_get", {"keys": "TEST-123,TEST-BAD"}
-    )
+    response = await jira_client.call_tool("jira_get", {"keys": "TEST-123,TEST-BAD"})
     content = json.loads(response.content[0].text)
     assert content["TEST-123"]["key"] == "TEST-123"
     assert content["TEST-123"]["summary"] == "Test Issue Summary"
@@ -869,12 +857,8 @@ async def test_jira_find_similar_to_path(jira_client, mock_jira_fetcher):
     fake = {"total_matches": 2, "returned": 2, "results": []}
     # NOTE: no `src.` prefix — see test_jira_find_semantic_path.
     mock_impl = AsyncMock(return_value=fake)
-    with patch(
-        "mcp_atlassian.servers.vector_tools.semantic_search_impl", mock_impl
-    ):
-        response = await jira_client.call_tool(
-            "jira_find", {"similar_to": "TEST-123"}
-        )
+    with patch("mcp_atlassian.servers.vector_tools.semantic_search_impl", mock_impl):
+        response = await jira_client.call_tool("jira_find", {"similar_to": "TEST-123"})
     content = json.loads(response.content[0].text)
     assert content["mode"] == "similar"
     assert content["similar_to"] == "TEST-123"
@@ -941,7 +925,9 @@ async def test_jira_transition_batch(jira_client, mock_jira_fetcher):
 
 
 @pytest.mark.anyio
-async def test_jira_transition_invalid_name_lists_options(jira_client, mock_jira_fetcher):
+async def test_jira_transition_invalid_name_lists_options(
+    jira_client, mock_jira_fetcher
+):
     mock_jira_fetcher.get_available_transitions.return_value = [
         {"id": "41", "name": "Done", "to_status": "Done"},
     ]
@@ -1011,11 +997,15 @@ def test_operation_response_degrades_when_shaping_raises_and_key_is_garbage():
     assert isinstance(parsed, dict)
     assert parsed["message"] == "Issue created successfully"
     assert "response_shaping_error" in parsed
-    assert "key" not in parsed or parsed["key"] is None or isinstance(parsed["key"], str)
+    assert (
+        "key" not in parsed or parsed["key"] is None or isinstance(parsed["key"], str)
+    )
 
 
 @pytest.mark.anyio
-async def test_jira_transition_rejects_bogus_return_mode(jira_client, mock_jira_fetcher):
+async def test_jira_transition_rejects_bogus_return_mode(
+    jira_client, mock_jira_fetcher
+):
     mock_jira_fetcher.get_available_transitions.return_value = [
         {"id": "41", "name": "Done", "to_status": "Done"},
     ]
@@ -1084,7 +1074,11 @@ async def test_jira_comment_preview_is_stored_not_input(jira_client, mock_jira_f
 
 @pytest.mark.anyio
 async def test_jira_comment_warns_on_markdown(jira_client, mock_jira_fetcher):
-    mock_jira_fetcher.add_comment.return_value = {"id": "1", "body": "x", "created": "c"}
+    mock_jira_fetcher.add_comment.return_value = {
+        "id": "1",
+        "body": "x",
+        "created": "c",
+    }
     response = await jira_client.call_tool(
         "jira_comment", {"issue_key": "TEST-123", "body": "**bold** text"}
     )
@@ -1143,13 +1137,21 @@ async def test_jira_link_issue_link_success(jira_client, mock_jira_fetcher):
     mock_jira_fetcher.create_issue_link.return_value = {"success": True}
     response = await jira_client.call_tool(
         "jira_link",
-        {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "blocks"},  # case-insensitive NAME match ("blocks" == "Blocks".casefold())
+        {
+            "issue_key": "TEST-1",
+            "to": "TEST-2",
+            "link_type": "blocks",
+        },  # case-insensitive NAME match ("blocks" == "Blocks".casefold())
     )
     content = json.loads(response.content[0].text)
     assert content["success"] is True
     assert content["key"] == "TEST-1"
     mock_jira_fetcher.create_issue_link.assert_called_once_with(
-        {"type": {"name": "Blocks"}, "inwardIssue": {"key": "TEST-1"}, "outwardIssue": {"key": "TEST-2"}}
+        {
+            "type": {"name": "Blocks"},
+            "inwardIssue": {"key": "TEST-1"},
+            "outwardIssue": {"key": "TEST-2"},
+        }
     )
 
 
@@ -1161,20 +1163,35 @@ async def test_jira_link_issue_link_matches_by_phrase(jira_client, mock_jira_fet
     mock_jira_fetcher.create_issue_link.return_value = {"success": True}
     response = await jira_client.call_tool(
         "jira_link",
-        {"issue_key": "TEST-1", "to": "TEST-2", "link_type": "is blocked by"},  # phrase, not a name
+        {
+            "issue_key": "TEST-1",
+            "to": "TEST-2",
+            "link_type": "is blocked by",
+        },  # phrase, not a name
     )
     content = json.loads(response.content[0].text)
     assert content["success"] is True
     mock_jira_fetcher.create_issue_link.assert_called_once_with(
-        {"type": {"name": "Blocks"}, "inwardIssue": {"key": "TEST-1"}, "outwardIssue": {"key": "TEST-2"}}
+        {
+            "type": {"name": "Blocks"},
+            "inwardIssue": {"key": "TEST-1"},
+            "outwardIssue": {"key": "TEST-2"},
+        }
     )
 
 
 @pytest.mark.anyio
-async def test_jira_link_issue_link_ambiguous_phrase_raises(jira_client, mock_jira_fetcher):
+async def test_jira_link_issue_link_ambiguous_phrase_raises(
+    jira_client, mock_jira_fetcher
+):
     mock_jira_fetcher.get_issue_link_types.return_value = [
         {"id": "1", "name": "Relates", "inward": "relates to", "outward": "relates to"},
-        {"id": "2", "name": "Mentions", "inward": "relates to", "outward": "relates to"},
+        {
+            "id": "2",
+            "name": "Mentions",
+            "inward": "relates to",
+            "outward": "relates to",
+        },
     ]
     with pytest.raises(Exception, match="[Aa]mbiguous"):
         await jira_client.call_tool(
@@ -1184,7 +1201,9 @@ async def test_jira_link_issue_link_ambiguous_phrase_raises(jira_client, mock_ji
 
 
 @pytest.mark.anyio
-async def test_jira_link_issue_link_unknown_type_lists_valid(jira_client, mock_jira_fetcher):
+async def test_jira_link_issue_link_unknown_type_lists_valid(
+    jira_client, mock_jira_fetcher
+):
     mock_jira_fetcher.get_issue_link_types.return_value = [
         {"id": "1", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
         {"id": "2", "name": "Relates", "inward": "relates to", "outward": "relates to"},
@@ -1211,51 +1230,67 @@ async def test_jira_link_remove(jira_client, mock_jira_fetcher):
 
 
 @pytest.mark.anyio
-async def test_jira_attach_single(jira_client, mock_jira_fetcher):
-    mock_jira_fetcher.upload_attachment.return_value = {
-        "success": True, "filename": "x.png", "size": 123, "id": "10001",
+async def test_jira_attach_single_file_path_alias(jira_client, mock_jira_fetcher):
+    """'file_path' (singular) is accepted as an alias for 'file_paths'."""
+    mock_jira_fetcher.upload_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-1",
+        "total": 1,
+        "uploaded": [{"filename": "x.png", "size": 123, "id": "10001"}],
+        "failed": [],
     }
     response = await jira_client.call_tool(
         "jira_attach", {"issue_key": "TEST-1", "file_path": "/tmp/x.png"}
     )
     content = json.loads(response.content[0].text)
     assert content["success"] is True
-    assert content["filename"] == "x.png"
-    mock_jira_fetcher.upload_attachment.assert_called_once_with(
-        issue_key="TEST-1", file_path="/tmp/x.png"
+    assert content["uploaded"][0]["filename"] == "x.png"
+    mock_jira_fetcher.upload_attachments.assert_called_once_with(
+        "TEST-1", ["/tmp/x.png"]
     )
 
 
 @pytest.mark.anyio
 async def test_jira_attach_accepts_key_alias(jira_client, mock_jira_fetcher):
-    mock_jira_fetcher.upload_attachment.return_value = {"success": True, "filename": "a"}
+    mock_jira_fetcher.upload_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-2",
+        "total": 1,
+        "uploaded": [{"filename": "a"}],
+        "failed": [],
+    }
     response = await jira_client.call_tool(
         "jira_attach", {"key": "TEST-2", "file_path": "/tmp/a"}
     )
     content = json.loads(response.content[0].text)
     assert content["success"] is True
-    mock_jira_fetcher.upload_attachment.assert_called_once_with(
-        issue_key="TEST-2", file_path="/tmp/a"
-    )
+    mock_jira_fetcher.upload_attachments.assert_called_once_with("TEST-2", ["/tmp/a"])
 
 
 @pytest.mark.anyio
-async def test_jira_attach_multiple_files(jira_client, mock_jira_fetcher):
-    mock_jira_fetcher.upload_attachment.side_effect = [
-        {"success": True, "filename": "a"},
-        {"success": False, "error": "File not found: /tmp/b"},
-    ]
+async def test_jira_attach_multiple_files_csv(jira_client, mock_jira_fetcher):
+    """A comma-separated file_path expands into a single upload_attachments call."""
+    mock_jira_fetcher.upload_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-3",
+        "total": 2,
+        "uploaded": [{"filename": "a"}],
+        "failed": [{"filename": "b", "error": "File not found: /tmp/b"}],
+    }
     response = await jira_client.call_tool(
         "jira_attach", {"issue_key": "TEST-3", "file_path": "/tmp/a,/tmp/b"}
     )
     content = json.loads(response.content[0].text)
-    assert content["summary"] == {"ok": 1, "fail": 1, "total": 2}
-    assert mock_jira_fetcher.upload_attachment.call_count == 2
+    assert len(content["uploaded"]) == 1
+    assert len(content["failed"]) == 1
+    mock_jira_fetcher.upload_attachments.assert_called_once_with(
+        "TEST-3", ["/tmp/a", "/tmp/b"]
+    )
 
 
 @pytest.mark.anyio
 async def test_jira_attach_requires_file_path(jira_client):
-    with pytest.raises(Exception, match="file_path"):
+    with pytest.raises(Exception, match="file_paths"):
         await jira_client.call_tool("jira_attach", {"issue_key": "TEST-1"})
 
 
@@ -1291,7 +1326,10 @@ async def test_jira_worklog_add(jira_client, mock_jira_fetcher):
 async def test_jira_agile_boards(jira_client, mock_jira_fetcher):
     board = MagicMock()
     board.to_simplified_dict.return_value = {
-        "id": 1, "name": "DS board", "type": "scrum", "project_key": "DS",
+        "id": 1,
+        "name": "DS board",
+        "type": "scrum",
+        "project_key": "DS",
     }
     mock_jira_fetcher.get_all_agile_boards_model.return_value = [board]
     response = await jira_client.call_tool("jira_agile", {"action": "boards"})
@@ -1332,7 +1370,10 @@ async def test_jira_versions_create(jira_client, mock_jira_fetcher):
 
 @pytest.mark.anyio
 async def test_jira_projects_user_lookup(jira_client, mock_jira_fetcher):
-    mock_jira_fetcher.get_user_profile_by_identifier.return_value.to_simplified_dict.return_value = {"account_id": "x", "display_name": "Test User"}
+    mock_jira_fetcher.get_user_profile_by_identifier.return_value.to_simplified_dict.return_value = {
+        "account_id": "x",
+        "display_name": "Test User",
+    }
     response = await jira_client.call_tool(
         "jira_projects", {"user": "user@example.com"}
     )
@@ -1345,10 +1386,10 @@ async def test_jira_projects_user_lookup(jira_client, mock_jira_fetcher):
 
 @pytest.mark.anyio
 async def test_jira_projects_field_search(jira_client, mock_jira_fetcher):
-    mock_jira_fetcher.search_fields.return_value = [{"id": "duedate", "name": "Due date"}]
-    response = await jira_client.call_tool(
-        "jira_projects", {"field_keyword": "due"}
-    )
+    mock_jira_fetcher.search_fields.return_value = [
+        {"id": "duedate", "name": "Due date"}
+    ]
+    response = await jira_client.call_tool("jira_projects", {"field_keyword": "due"})
     content = json.loads(response.content[0].text)
     assert content["fields"][0]["id"] == "duedate"
 
@@ -1357,7 +1398,12 @@ async def test_jira_projects_field_search(jira_client, mock_jira_fetcher):
 async def test_jira_projects_issue_types(jira_client, mock_jira_fetcher):
     """issue_types mode returns the creatable types for a project, compacted."""
     mock_jira_fetcher.get_project_issue_types.return_value = [
-        {"id": "10044", "name": "Initiative", "subtask": False, "description": "Big bet"},
+        {
+            "id": "10044",
+            "name": "Initiative",
+            "subtask": False,
+            "description": "Big bet",
+        },
         {"id": "10001", "name": "Story", "subtask": False, "description": ""},
     ]
     response = await jira_client.call_tool("jira_projects", {"issue_types": "AI"})
@@ -1395,35 +1441,68 @@ class _ROContext:
 @pytest.mark.anyio
 async def test_jira_agile_create_sprint_blocked_in_read_only(mock_jira_fetcher):
     from src.mcp_atlassian.servers.jira import agile
-    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
         with pytest.raises(ValueError, match="read-only"):
-            await agile.fn(_ROContext(), action="create_sprint", board_id="1", sprint_name="S", start_date="2026-01-01", end_date="2026-01-14")
+            await agile.fn(
+                _ROContext(),
+                action="create_sprint",
+                board_id="1",
+                sprint_name="S",
+                start_date="2026-01-01",
+                end_date="2026-01-14",
+            )
     mock_jira_fetcher.create_sprint.assert_not_called()
 
 
 @pytest.mark.anyio
 async def test_jira_agile_update_sprint_blocked_in_read_only(mock_jira_fetcher):
     from src.mcp_atlassian.servers.jira import agile
-    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
         with pytest.raises(ValueError, match="read-only"):
-            await agile.fn(_ROContext(), action="update_sprint", sprint_id="42", state="closed")
+            await agile.fn(
+                _ROContext(), action="update_sprint", sprint_id="42", state="closed"
+            )
     mock_jira_fetcher.update_sprint.assert_not_called()
 
 
 @pytest.mark.anyio
 async def test_jira_agile_boards_allowed_in_read_only(mock_jira_fetcher):
     from src.mcp_atlassian.servers.jira import agile
-    board = MagicMock(); board.to_simplified_dict.return_value = {"id":1,"name":"B","type":"scrum","project_key":"DS"}
+
+    board = MagicMock()
+    board.to_simplified_dict.return_value = {
+        "id": 1,
+        "name": "B",
+        "type": "scrum",
+        "project_key": "DS",
+    }
     mock_jira_fetcher.get_all_agile_boards_model.return_value = [board]
-    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
-        out = await agile.fn(_ROContext(), action="boards")  # read must NOT raise in read-only
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
+        out = await agile.fn(
+            _ROContext(), action="boards"
+        )  # read must NOT raise in read-only
     assert "boards" in out
 
 
 @pytest.mark.anyio
 async def test_jira_versions_create_blocked_in_read_only(mock_jira_fetcher):
     from src.mcp_atlassian.servers.jira import versions
-    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
         with pytest.raises(ValueError, match="read-only"):
             await versions.fn(_ROContext(), project_key="TEST", name="v9.9")
     mock_jira_fetcher.create_project_version.assert_not_called()
@@ -1432,8 +1511,12 @@ async def test_jira_versions_create_blocked_in_read_only(mock_jira_fetcher):
 @pytest.mark.anyio
 async def test_jira_versions_list_allowed_in_read_only(mock_jira_fetcher):
     from src.mcp_atlassian.servers.jira import versions
+
     mock_jira_fetcher.get_project_versions.return_value = [{"name": "v1.0"}]
-    with patch("src.mcp_atlassian.servers.jira.get_jira_fetcher", AsyncMock(return_value=mock_jira_fetcher)):
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
         out = await versions.fn(_ROContext(), project_key="TEST")  # read must NOT raise
     assert out["versions"][0]["name"] == "v1.0"
 
@@ -1471,15 +1554,17 @@ async def test_jira_handoff_budget_is_real(jira_client, mock_jira_fetcher):
         for i in range(n):
             m = MagicMock()
             m.to_simplified_dict.return_value = {
-                "key": f"DS-{10000+i}",
+                "key": f"DS-{10000 + i}",
                 "summary": "X" * 200,  # longer than the cap; tool must truncate
                 "status": {"name": "Waiting for Customer Response"},
                 "priority": {"name": "Highest"},
                 "updated": "2026-06-10T10:00:00.000+0000",
             }
             issues.append(m)
-        r = MagicMock(); r.issues = issues
+        r = MagicMock()
+        r.issues = issues
         return r
+
     mock_jira_fetcher.search_issues.side_effect = big_result
     response = await jira_client.call_tool("jira_handoff", {})
     text = response.content[0].text
@@ -1508,11 +1593,15 @@ async def test_eval_triage_sweep_is_one_call(jira_client, mock_jira_fetcher):
     )
     content = json.loads(response.content[0].text)
     assert len(content) == 8  # 8 issues, one MCP call
-    assert mock_jira_fetcher.get_issue.call_count == 8  # server-side fan-out, not agent-side
+    assert (
+        mock_jira_fetcher.get_issue.call_count == 8
+    )  # server-side fan-out, not agent-side
 
 
 @pytest.mark.anyio
-async def test_eval_transition_five_by_name_zero_lookups(jira_client, mock_jira_fetcher):
+async def test_eval_transition_five_by_name_zero_lookups(
+    jira_client, mock_jira_fetcher
+):
     """C3: transition 5 issues by status NAME — no get_transitions tool exists at all."""
     mock_jira_fetcher.get_available_transitions.return_value = [
         {"id": "41", "name": "Done", "to_status": "Done"}
@@ -1596,7 +1685,9 @@ async def test_jira_assign_calls_assign_issue(jira_client, mock_jira_fetcher):
     assert content["key"] == "TEST-100"
     assert content["prior_assignee"] == "Jack Felke"
     assert content["new_assignee"] == "Stan Ulmasov"
-    mock_jira_fetcher.assign_issue.assert_called_once_with("TEST-100", "stan@example.com")
+    mock_jira_fetcher.assign_issue.assert_called_once_with(
+        "TEST-100", "stan@example.com"
+    )
 
 
 @pytest.mark.anyio
@@ -1604,9 +1695,7 @@ async def test_jira_delete_calls_delete_issue(jira_client, mock_jira_fetcher):
     """jira_delete routes through the fetcher's delete_issue method."""
     mock_jira_fetcher.delete_issue.return_value = True
 
-    response = await jira_client.call_tool(
-        "jira_delete", {"issue_key": "TEST-777"}
-    )
+    response = await jira_client.call_tool("jira_delete", {"issue_key": "TEST-777"})
     content = json.loads(response.content[0].text)
     assert content["success"] is True
     assert "deleted" in content["message"].lower()
@@ -1621,9 +1710,7 @@ async def test_jira_projects_include_archived_passes_through(
     jira_client, mock_jira_fetcher
 ):
     """include_archived=True must reach get_all_projects with the flag set."""
-    response = await jira_client.call_tool(
-        "jira_projects", {"include_archived": True}
-    )
+    response = await jira_client.call_tool("jira_projects", {"include_archived": True})
     content = json.loads(response.content[0].text)
     assert "projects" in content
     project_keys = [p["key"] for p in content["projects"]]
@@ -1857,3 +1944,158 @@ async def test_jira_transition_response_format_aliases_return_mode(
     )
     content = json.loads(response.content[0].text)
     assert content["key"] == "TEST-123"
+
+
+# --- v2 surface: jira_attach (consolidated attachment tool) ------------------
+
+
+@pytest.mark.anyio
+async def test_jira_attach_upload_file_paths(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.upload_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-123",
+        "total": 2,
+        "uploaded": [
+            {"filename": "a.png", "size": 10, "id": "1"},
+            {"filename": "b.pdf", "size": 20, "id": "2"},
+        ],
+        "failed": [],
+    }
+    response = await jira_client.call_tool(
+        "jira_attach",
+        {"issue_key": "TEST-123", "file_paths": "/tmp/a.png,/tmp/b.pdf"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["issue_key"] == "TEST-123"
+    assert len(content["uploaded"]) == 2
+    assert content["failed"] == []
+    assert "url" in content
+    mock_jira_fetcher.upload_attachments.assert_called_once_with(
+        "TEST-123", ["/tmp/a.png", "/tmp/b.pdf"]
+    )
+    mock_jira_fetcher.upload_attachment_content.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_jira_attach_upload_base64_content(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.upload_attachment_content.return_value = {
+        "success": True,
+        "issue_key": "TEST-123",
+        "filename": "note.txt",
+        "size": 5,
+        "id": "99",
+    }
+    response = await jira_client.call_tool(
+        "jira_attach",
+        {
+            "issue_key": "TEST-123",
+            "content": "aGVsbG8=",  # "hello"
+            "filename": "note.txt",
+        },
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["uploaded"][0]["filename"] == "note.txt"
+    mock_jira_fetcher.upload_attachment_content.assert_called_once_with(
+        "TEST-123", "note.txt", "aGVsbG8="
+    )
+    mock_jira_fetcher.upload_attachments.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_jira_attach_upload_requires_a_source(jira_client, mock_jira_fetcher):
+    with pytest.raises(ToolError, match="file_paths"):
+        await jira_client.call_tool("jira_attach", {"issue_key": "TEST-123"})
+
+
+@pytest.mark.anyio
+async def test_jira_attach_upload_content_requires_filename(
+    jira_client, mock_jira_fetcher
+):
+    with pytest.raises(ToolError, match="filename"):
+        await jira_client.call_tool(
+            "jira_attach", {"issue_key": "TEST-123", "content": "aGVsbG8="}
+        )
+
+
+@pytest.mark.anyio
+async def test_jira_attach_download(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.download_issue_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-123",
+        "total": 1,
+        "downloaded": [{"filename": "a.png", "path": "/out/a.png", "size": 10}],
+        "failed": [],
+    }
+    response = await jira_client.call_tool(
+        "jira_attach",
+        {"issue_key": "TEST-123", "action": "download", "target_dir": "/out"},
+    )
+    content = json.loads(response.content[0].text)
+    assert content["success"] is True
+    assert content["downloaded"][0]["filename"] == "a.png"
+    mock_jira_fetcher.download_issue_attachments.assert_called_once_with(
+        "TEST-123", "/out"
+    )
+
+
+@pytest.mark.anyio
+async def test_jira_attach_download_requires_target_dir(jira_client, mock_jira_fetcher):
+    with pytest.raises(ToolError, match="target_dir"):
+        await jira_client.call_tool(
+            "jira_attach", {"issue_key": "TEST-123", "action": "download"}
+        )
+
+
+@pytest.mark.anyio
+async def test_jira_attach_list(jira_client, mock_jira_fetcher):
+    mock_jira_fetcher.list_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-123",
+        "total": 1,
+        "attachments": [{"filename": "a.png", "size": 10, "url": "http://x/a.png"}],
+    }
+    response = await jira_client.call_tool(
+        "jira_attach", {"issue_key": "TEST-123", "action": "list"}
+    )
+    content = json.loads(response.content[0].text)
+    assert content["total"] == 1
+    assert content["attachments"][0]["filename"] == "a.png"
+    mock_jira_fetcher.list_attachments.assert_called_once_with("TEST-123")
+
+
+@pytest.mark.anyio
+async def test_jira_attach_upload_blocked_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import attach
+
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
+        with pytest.raises(ValueError, match="read-only"):
+            await attach.fn(
+                _ROContext(),
+                issue_key="TEST-123",
+                action="upload",
+                file_paths="/tmp/a.png",
+            )
+    mock_jira_fetcher.upload_attachments.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_jira_attach_list_allowed_in_read_only(mock_jira_fetcher):
+    from src.mcp_atlassian.servers.jira import attach
+
+    mock_jira_fetcher.list_attachments.return_value = {
+        "success": True,
+        "issue_key": "TEST-123",
+        "total": 0,
+        "attachments": [],
+    }
+    with patch(
+        "src.mcp_atlassian.servers.jira.get_jira_fetcher",
+        AsyncMock(return_value=mock_jira_fetcher),
+    ):
+        out = await attach.fn(_ROContext(), issue_key="TEST-123", action="list")
+    assert out["total"] == 0

@@ -1,7 +1,11 @@
 """Attachment operations for Jira API."""
 
+import base64
+import binascii
 import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -279,4 +283,95 @@ class AttachmentsMixin(JiraClient, AttachmentsOperationsProto):
             "total": len(file_paths),
             "uploaded": uploaded,
             "failed": failed,
+        }
+
+    def upload_attachment_content(
+        self, issue_key: str, filename: str, content_b64: str
+    ) -> dict[str, Any]:
+        """
+        Upload inline base64-encoded content as an attachment to a Jira issue.
+
+        Useful when the content was produced in-memory and never written to
+        disk. The content is decoded and written to a temporary file using
+        ``filename`` as its basename (Jira derives the attachment name from the
+        path basename), then uploaded via :meth:`upload_attachment`.
+
+        Args:
+            issue_key: The Jira issue key (e.g., 'PROJ-123')
+            filename: The name the attachment should have in Jira
+            content_b64: The base64-encoded file content
+
+        Returns:
+            A dictionary with upload result information
+        """
+        if not issue_key:
+            logger.error("No issue key provided for attachment upload")
+            return {"success": False, "error": "No issue key provided"}
+
+        if not filename:
+            logger.error("No filename provided for attachment upload")
+            return {"success": False, "error": "No filename provided"}
+
+        if not content_b64:
+            logger.error("No content provided for attachment upload")
+            return {"success": False, "error": "No content provided"}
+
+        try:
+            # validate=True rejects whitespace/garbage rather than silently
+            # dropping it, so callers get a clear error on malformed input.
+            raw = base64.b64decode(content_b64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            logger.error(f"Invalid base64 content for {filename}: {e}")
+            return {"success": False, "error": f"Invalid base64 content: {e}"}
+
+        # Write the bytes to a temp dir under the real basename so the uploaded
+        # attachment keeps the intended name, then clean up the dir afterwards.
+        safe_name = os.path.basename(filename)
+        temp_dir = tempfile.mkdtemp(prefix="mcp-jira-attach-")
+        temp_path = os.path.join(temp_dir, safe_name)
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(raw)
+            return self.upload_attachment(issue_key, temp_path)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def list_attachments(self, issue_key: str) -> dict[str, Any]:
+        """
+        List attachment metadata for a Jira issue.
+
+        Args:
+            issue_key: The Jira issue key (e.g., 'PROJ-123')
+
+        Returns:
+            A dictionary with attachment metadata (id, filename, size,
+            content type, author, created date, and URLs).
+        """
+        if not issue_key:
+            logger.error("No issue key provided for listing attachments")
+            return {"success": False, "error": "No issue key provided"}
+
+        issue_data = self.jira.issue(issue_key, fields="attachment")
+
+        if not isinstance(issue_data, dict):
+            msg = f"Unexpected return value type from `jira.issue`: {type(issue_data)}"
+            logger.error(msg)
+            raise TypeError(msg)
+
+        if "fields" not in issue_data:
+            logger.error(f"Could not retrieve issue {issue_key}")
+            return {"success": False, "error": f"Could not retrieve issue {issue_key}"}
+
+        attachment_data = issue_data.get("fields", {}).get("attachment", [])
+        attachments = [
+            JiraAttachment.from_api_response(a).to_simplified_dict()
+            for a in attachment_data
+            if isinstance(a, dict)
+        ]
+
+        return {
+            "success": True,
+            "issue_key": issue_key,
+            "total": len(attachments),
+            "attachments": attachments,
         }

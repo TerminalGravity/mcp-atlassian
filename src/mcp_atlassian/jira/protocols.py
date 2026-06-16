@@ -28,6 +28,34 @@ class AttachmentsOperationsProto(Protocol):
             A dictionary with upload results
         """
 
+    @abstractmethod
+    def upload_attachment_content(
+        self, issue_key: str, filename: str, content_b64: str
+    ) -> dict[str, Any]:
+        """
+        Upload inline base64-encoded content as an attachment to a Jira issue.
+
+        Args:
+            issue_key: The Jira issue key (e.g., 'PROJ-123')
+            filename: The name the attachment should have in Jira
+            content_b64: The base64-encoded file content
+
+        Returns:
+            A dictionary with upload result information
+        """
+
+    @abstractmethod
+    def list_attachments(self, issue_key: str) -> dict[str, Any]:
+        """
+        List attachment metadata for a Jira issue.
+
+        Args:
+            issue_key: The Jira issue key (e.g., 'PROJ-123')
+
+        Returns:
+            A dictionary with attachment metadata
+        """
+
 
 class IssueOperationsProto(Protocol):
     """Protocol defining issue operations interface."""

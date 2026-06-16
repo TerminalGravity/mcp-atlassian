@@ -419,13 +419,13 @@ def test_get_project_notification_scheme_exception(projects_mixin: ProjectsMixin
 def test_get_project_issue_types(
     projects_mixin: ProjectsMixin, mock_issue_types: list[dict]
 ):
-    """Test get_project_issue_types method."""
-    createmeta = {
-        "projects": [
-            {"key": "PROJ1", "name": "Project One", "issuetypes": mock_issue_types}
-        ]
+    """The paged createmeta endpoint returns issue types under "values"."""
+    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {
+        "maxResults": 50,
+        "startAt": 0,
+        "total": len(mock_issue_types),
+        "values": mock_issue_types,
     }
-    projects_mixin.jira.issue_createmeta_issuetypes.return_value = createmeta
 
     result = projects_mixin.get_project_issue_types("PROJ1")
     assert result == mock_issue_types
@@ -434,20 +434,51 @@ def test_get_project_issue_types(
     )
 
 
+def test_get_project_issue_types_issuetypes_key(
+    projects_mixin: ProjectsMixin, mock_issue_types: list[dict]
+):
+    """Some responses use the "issueTypes" key instead of "values"."""
+    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {
+        "issueTypes": mock_issue_types
+    }
+
+    result = projects_mixin.get_project_issue_types("PROJ1")
+    assert result == mock_issue_types
+
+
+def test_get_project_issue_types_legacy_shape(
+    projects_mixin: ProjectsMixin, mock_issue_types: list[dict]
+):
+    """Legacy global-createmeta shape still parses via the fallback."""
+    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {
+        "projects": [
+            {"key": "PROJ1", "name": "Project One", "issuetypes": mock_issue_types}
+        ]
+    }
+
+    result = projects_mixin.get_project_issue_types("PROJ1")
+    assert result == mock_issue_types
+
+
 def test_get_project_issue_types_empty_response(projects_mixin: ProjectsMixin):
     """Test get_project_issue_types method with empty response."""
-    # Empty projects list
-    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {"projects": []}
+    # Empty paged response
+    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {"values": []}
 
     result = projects_mixin.get_project_issue_types("PROJ1")
     assert result == []
     projects_mixin.jira.issue_createmeta_issuetypes.assert_called_once()
 
-    # No issuetypes field
+    # Empty legacy projects list
     projects_mixin.jira.issue_createmeta_issuetypes.reset_mock()
-    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {
-        "projects": [{"key": "PROJ1", "name": "Project One"}]
-    }
+    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {"projects": []}
+
+    result = projects_mixin.get_project_issue_types("PROJ1")
+    assert result == []
+
+    # No recognizable key at all
+    projects_mixin.jira.issue_createmeta_issuetypes.reset_mock()
+    projects_mixin.jira.issue_createmeta_issuetypes.return_value = {"maxResults": 50}
 
     result = projects_mixin.get_project_issue_types("PROJ1")
     assert result == []
