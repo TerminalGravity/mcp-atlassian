@@ -8,16 +8,38 @@ from enum import Enum
 from pathlib import Path
 
 
+def _get_project_root() -> Path:
+    """Resolve the project root from this file's location.
+
+    config.py -> vector/ -> mcp_atlassian/ -> src/ -> project_root/
+    """
+    return Path(__file__).parent.parent.parent.parent
+
+
 def _get_default_db_path() -> Path:
     """Get default database path as absolute path.
 
     Uses project root's data/lancedb directory to ensure all services
     (MCP, web UI, CLI) use the same vector store.
     """
-    # Go up from this file to find project root
-    # config.py -> vector/ -> mcp_atlassian/ -> src/ -> project_root/
-    package_dir = Path(__file__).parent.parent.parent.parent
-    return package_dir / "data" / "lancedb"
+    return _get_project_root() / "data" / "lancedb"
+
+
+def _resolve_db_path() -> Path:
+    """Resolve the LanceDB path, anchoring relative values to the project root.
+
+    A relative ``VECTOR_DB_PATH`` (e.g. ``./data/lancedb``) is otherwise resolved
+    against the process CWD, which differs between the MCP server, web UI, and CLI
+    and silently points services at an empty/missing index. Anchoring to the
+    project root keeps all services on the same store regardless of launch CWD.
+    """
+    raw = os.getenv("VECTOR_DB_PATH")
+    if not raw:
+        return _get_default_db_path()
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p
+    return (_get_project_root() / p).resolve()
 
 
 class EmbeddingProvider(str, Enum):
@@ -44,12 +66,9 @@ class VectorConfig:
         MCP_MAX_RESPONSE_TOKENS: Max tokens in MCP responses
     """
 
-    # Storage - default to absolute path relative to package location
-    db_path: Path = field(
-        default_factory=lambda: Path(
-            os.getenv("VECTOR_DB_PATH", str(_get_default_db_path()))
-        )
-    )
+    # Storage - absolute path; relative VECTOR_DB_PATH values are anchored to
+    # the project root (not the process CWD) so all services share one store.
+    db_path: Path = field(default_factory=_resolve_db_path)
 
     # Embeddings
     embedding_provider: EmbeddingProvider = field(
@@ -75,9 +94,7 @@ class VectorConfig:
         default_factory=lambda: int(os.getenv("VECTOR_SYNC_INTERVAL_MINUTES", "30"))
     )
     sync_projects: list[str] = field(
-        default_factory=lambda: _parse_projects(
-            os.getenv("VECTOR_SYNC_PROJECTS", "*")
-        )
+        default_factory=lambda: _parse_projects(os.getenv("VECTOR_SYNC_PROJECTS", "*"))
     )
     sync_comments: bool = field(
         default_factory=lambda: os.getenv("VECTOR_SYNC_COMMENTS", "true").lower()

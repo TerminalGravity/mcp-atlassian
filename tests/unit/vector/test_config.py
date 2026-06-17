@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from mcp_atlassian.vector.config import EmbeddingProvider, VectorConfig
 
 
@@ -57,38 +55,51 @@ def test_from_env_custom_values():
         assert config.sync_comments is False
 
 
+def test_relative_db_path_anchored_to_project_root():
+    """A relative VECTOR_DB_PATH resolves against the project root, not the CWD.
+
+    Regression: a CWD-relative path silently pointed services at an empty index
+    (e.g. the MCP server resolving './data/lancedb' from a foreign working dir).
+    """
+    from mcp_atlassian.vector.config import _get_project_root
+
+    with patch.dict(os.environ, {"VECTOR_DB_PATH": "./data/lancedb"}, clear=True):
+        config = VectorConfig.from_env()
+        assert config.db_path.is_absolute()
+        assert config.db_path == _get_project_root() / "data" / "lancedb"
+
+
+def test_absolute_db_path_preserved():
+    """An absolute VECTOR_DB_PATH is used verbatim."""
+    with patch.dict(os.environ, {"VECTOR_DB_PATH": "/custom/path/lancedb"}, clear=True):
+        config = VectorConfig.from_env()
+        assert config.db_path == Path("/custom/path/lancedb")
+
+
 def test_embedding_provider_openai():
     """Test OpenAI embedding provider."""
-    with patch.dict(
-        os.environ, {"VECTOR_EMBEDDING_PROVIDER": "openai"}, clear=True
-    ):
+    with patch.dict(os.environ, {"VECTOR_EMBEDDING_PROVIDER": "openai"}, clear=True):
         config = VectorConfig.from_env()
         assert config.embedding_provider == EmbeddingProvider.OPENAI
 
 
 def test_embedding_provider_local():
     """Test local embedding provider."""
-    with patch.dict(
-        os.environ, {"VECTOR_EMBEDDING_PROVIDER": "local"}, clear=True
-    ):
+    with patch.dict(os.environ, {"VECTOR_EMBEDDING_PROVIDER": "local"}, clear=True):
         config = VectorConfig.from_env()
         assert config.embedding_provider == EmbeddingProvider.LOCAL
 
 
 def test_sync_projects_wildcard():
     """Test that '*' for projects results in empty list (all projects)."""
-    with patch.dict(
-        os.environ, {"VECTOR_SYNC_PROJECTS": "*"}, clear=True
-    ):
+    with patch.dict(os.environ, {"VECTOR_SYNC_PROJECTS": "*"}, clear=True):
         config = VectorConfig.from_env()
         assert config.sync_projects == []
 
 
 def test_sync_projects_comma_separated():
     """Test parsing comma-separated project keys."""
-    with patch.dict(
-        os.environ, {"VECTOR_SYNC_PROJECTS": "DS, ENG , PROJ"}, clear=True
-    ):
+    with patch.dict(os.environ, {"VECTOR_SYNC_PROJECTS": "DS, ENG , PROJ"}, clear=True):
         config = VectorConfig.from_env()
         assert config.sync_projects == ["DS", "ENG", "PROJ"]
 
@@ -121,9 +132,7 @@ def test_response_limits():
 
 def test_hybrid_search_weights():
     """Test hybrid search weight configuration."""
-    with patch.dict(
-        os.environ, {"VECTOR_FTS_WEIGHT": "0.5"}, clear=True
-    ):
+    with patch.dict(os.environ, {"VECTOR_FTS_WEIGHT": "0.5"}, clear=True):
         config = VectorConfig.from_env()
         assert config.fts_weight == 0.5
 
@@ -137,8 +146,6 @@ def test_cache_embeddings_default():
 
 def test_cache_embeddings_disabled():
     """Test disabling embedding cache."""
-    with patch.dict(
-        os.environ, {"VECTOR_CACHE_EMBEDDINGS": "false"}, clear=True
-    ):
+    with patch.dict(os.environ, {"VECTOR_CACHE_EMBEDDINGS": "false"}, clear=True):
         config = VectorConfig.from_env()
         assert config.cache_embeddings is False

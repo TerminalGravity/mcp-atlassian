@@ -47,6 +47,22 @@ class SyncScheduler:
         self._sync_count = 0
         self._error_count = 0
 
+    @staticmethod
+    def _refresh_server_singletons() -> None:
+        """Reset the MCP server's cached store after an in-process sync.
+
+        The MCP tools cache the LanceDBStore singleton; when the background
+        scheduler runs inside the same process, freshly synced rows are invisible
+        until that cache is dropped. Imported lazily to avoid a circular import
+        (servers.vector_tools imports from vector.*).
+        """
+        try:
+            from mcp_atlassian.servers.vector_tools import _reset_singletons
+
+            _reset_singletons()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not reset MCP vector singletons: {e}")
+
     @property
     def is_running(self) -> bool:
         """Check if the scheduler is running."""
@@ -112,6 +128,7 @@ class SyncScheduler:
                 self._last_sync = datetime.utcnow()
                 self._last_result = result
                 self._sync_count += 1
+                self._refresh_server_singletons()
 
                 if result.errors:
                     self._error_count += len(result.errors)
@@ -145,6 +162,7 @@ class SyncScheduler:
         self._last_sync = datetime.utcnow()
         self._last_result = result
         self._sync_count += 1
+        self._refresh_server_singletons()
 
         if result.errors:
             self._error_count += len(result.errors)
