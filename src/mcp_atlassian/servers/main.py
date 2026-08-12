@@ -36,6 +36,39 @@ async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+def _verify_jira_credentials(config: JiraConfig) -> str | None:
+    """Confirm the configured Jira credentials actually authenticate.
+
+    Returns a human-readable description of the authenticated account, or None
+    if the credentials were rejected (401/403).
+
+    Network/transport failures are treated as "reachable enough" and return a
+    placeholder rather than None, so a blip at startup does not disable the
+    Jira tools for the whole session.
+    """
+    try:
+        me = JiraFetcher(config=config).jira.myself()
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403):
+            return None
+        logger.warning(
+            "Could not verify Jira credentials at startup (%s). Continuing; "
+            "tool calls will surface any real problem.",
+            e,
+        )
+        return "unverified"
+
+    if not isinstance(me, dict):
+        return None
+    return (
+        me.get("emailAddress")
+        or me.get("displayName")
+        or me.get("accountId")
+        or "unknown account"
+    )
+
+
 @asynccontextmanager
 async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
     logger.info("Main Atlassian MCP server lifespan starting...")
@@ -50,10 +83,26 @@ async def main_lifespan(app: FastMCP[MainAppContext]) -> AsyncIterator[dict]:
         try:
             jira_config = JiraConfig.from_env()
             if jira_config.is_auth_configured():
-                loaded_jira_config = jira_config
-                logger.info(
-                    "Jira configuration loaded and authentication is configured."
-                )
+                # is_auth_configured() only checks that the fields are present.
+                # Verify they actually work: an expired/revoked token, or a token
+                # minted under a different Atlassian account than JIRA_USERNAME,
+                # otherwise surfaces later as empty search results that look like
+                # legitimate "no matches" answers.
+                account = _verify_jira_credentials(jira_config)
+                if account is None:
+                    logger.error(
+                        "Jira credentials were REJECTED by %s (401/403). Jira tools "
+                        "will be unavailable. The API token is likely expired, "
+                        "revoked, or was created under a different Atlassian account "
+                        "than JIRA_USERNAME. Update the token, then reconnect this "
+                        "MCP server so the new value is loaded.",
+                        jira_config.url,
+                    )
+                else:
+                    loaded_jira_config = jira_config
+                    logger.info(
+                        "Jira authenticated against %s as %s.", jira_config.url, account
+                    )
             else:
                 logger.warning(
                     "Jira URL found, but authentication is not fully configured. Jira tools will be unavailable."
